@@ -34,7 +34,8 @@ type Project = {
   error?: string;
 };
 
-const SPEEDS = [0.5, 1, 1.25, 1.5, 2, 3, 4];
+const SPEEDS = [0.5, 0.75, 1, 1.1, 1.2, 1.3, 1.4, 1.5, 1.75, 2, 2.5, 3, 4];
+const SPEED_PRESETS = [1, 1.1, 1.2, 1.3];
 const MAX_PROJECTS = 5;
 const MAX_CLIPS = 12;
 
@@ -153,12 +154,13 @@ export function VideoMergerApp() {
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [isBatching, setIsBatching] = useState(false);
-  const [batchSpeed, setBatchSpeed] = useState(1.5);
+  const [batchSpeed, setBatchSpeed] = useState(1);
   const [batchQuality, setBatchQuality] = useState<Project["quality"]>("720p");
   const [batchAspect, setBatchAspect] = useState<Project["aspect"]>("16:9");
   const [batchMuted, setBatchMuted] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const previewVideoRef = useRef<HTMLVideoElement>(null);
   const projectsRef = useRef(projects);
   const cancelledRef = useRef(false);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -187,8 +189,18 @@ export function VideoMergerApp() {
   const projectCountWithClips = projects.filter((project) => project.clips.length > 0).length;
   const totalQueueDuration = projects.reduce((sum, project) => sum + totalDuration(project), 0);
 
+  useEffect(() => {
+    if (!previewVideoRef.current || !selectedClip) return;
+    previewVideoRef.current.defaultPlaybackRate = selectedClip.speed;
+    previewVideoRef.current.playbackRate = selectedClip.speed;
+  }, [selectedClip?.id, selectedClip?.speed, selectedClip?.url]);
+
   const updateProject = useCallback((projectId: string, updater: (project: Project) => Project) => {
-    setProjects((current) => current.map((project) => project.id === projectId ? updater(project) : project));
+    setProjects((current) => {
+      const next = current.map((project) => project.id === projectId ? updater(project) : project);
+      projectsRef.current = next;
+      return next;
+    });
   }, []);
 
   const ingestFiles = useCallback(async (files: File[], projectId = activeProjectId) => {
@@ -312,17 +324,37 @@ export function VideoMergerApp() {
   };
 
   const applyBatchSettings = () => {
-    setProjects((current) => current.map((project) => ({
-      ...project,
-      quality: batchQuality,
-      aspect: batchAspect,
-      muted: batchMuted,
-      clips: project.clips.map((clip) => ({ ...clip, speed: batchSpeed })),
-      status: project.clips.length ? "idle" : project.status,
-      progress: 0,
-      statusText: project.clips.length ? "Đã áp dụng thiết lập chung" : project.statusText,
-    })));
+    setProjects((current) => {
+      const next = current.map((project) => ({
+        ...project,
+        quality: batchQuality,
+        aspect: batchAspect,
+        muted: batchMuted,
+        clips: project.clips.map((clip) => ({ ...clip, speed: batchSpeed })),
+        status: project.clips.length ? "idle" as const : project.status,
+        progress: 0,
+        statusText: project.clips.length ? "Đã áp dụng thiết lập chung" : project.statusText,
+      }));
+      projectsRef.current = next;
+      return next;
+    });
     showToast(`Đã áp dụng cho ${projectCountWithClips || projects.length} dự án.`);
+  };
+
+  const applyBatchSpeed = (speed: number) => {
+    setBatchSpeed(speed);
+    setProjects((current) => {
+      const next = current.map((project) => ({
+        ...project,
+        clips: project.clips.map((clip) => ({ ...clip, speed })),
+        status: project.clips.length ? "idle" as const : project.status,
+        progress: project.clips.length ? 0 : project.progress,
+        statusText: project.clips.length ? `Đã đặt tốc độ ${speed}×` : project.statusText,
+      }));
+      projectsRef.current = next;
+      return next;
+    });
+    showToast(`Đã áp dụng tốc độ ${speed}× cho ${projectCountWithClips || projects.length} dự án.`);
   };
 
   const notifyExtension = (project: Project) => {
@@ -513,7 +545,15 @@ export function VideoMergerApp() {
           <div className="editor-stage">
             {selectedClip ? (
               <div className={`video-preview ${activeAspectClass}`}>
-                <video key={selectedClip.url} src={selectedClip.url} controls playsInline preload="metadata" />
+                <video
+                  ref={previewVideoRef}
+                  key={selectedClip.url}
+                  src={selectedClip.url}
+                  controls
+                  playsInline
+                  preload="metadata"
+                  onLoadedMetadata={(event) => { event.currentTarget.playbackRate = selectedClip.speed; }}
+                />
                 <span className="preview-badge">XEM TRƯỚC · {selectedClip.speed}×</span>
               </div>
             ) : (
@@ -623,14 +663,14 @@ export function VideoMergerApp() {
           <div className="setting-group">
             <label htmlFor="batch-speed">Tốc độ chung</label>
             <div className="speed-control">
-              <select id="batch-speed" value={batchSpeed} onChange={(event) => setBatchSpeed(Number(event.target.value))}>
+              <select id="batch-speed" value={batchSpeed} onChange={(event) => applyBatchSpeed(Number(event.target.value))}>
                 {SPEEDS.map((speed) => <option key={speed} value={speed}>{speed}×</option>)}
               </select>
-              <span>NHANH</span>
+              <span>{batchSpeed === 1 ? "GỐC" : batchSpeed < 1 ? "CHẬM" : "NHANH"}</span>
             </div>
             <div className="speed-presets">
-              {[1, 1.5, 2, 3].map((speed) => (
-                <button type="button" key={speed} className={batchSpeed === speed ? "active" : ""} onClick={() => setBatchSpeed(speed)}>{speed}×</button>
+              {SPEED_PRESETS.map((speed) => (
+                <button type="button" key={speed} className={batchSpeed === speed ? "active" : ""} onClick={() => applyBatchSpeed(speed)}>{speed}×</button>
               ))}
             </div>
           </div>

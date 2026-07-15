@@ -117,19 +117,27 @@ class BrowserVideoEngine {
     ffmpeg: import("@ffmpeg/ffmpeg").FFmpeg,
     inputName: string,
   ) {
-    const logStart = this.recentLogs.length;
-    await ffmpeg.exec([
-      "-hide_banner",
-      "-i", inputName,
-      "-t", "0",
-      "-map", "0:v:0?",
-      "-map", "0:a:0?",
-      "-f", "null",
-      "-",
-    ]);
-    const inspectionLogs = this.recentLogs.slice(logStart);
-    this.recentLogs.splice(logStart);
-    return inspectionLogs.some((line) => /Stream #\d+:\d+[^:]*: Audio:/i.test(line));
+    const inspectionLogs: string[] = [];
+    const inspectionListener = ({ message }: { type: string; message: string }) => {
+      if (message.trim()) inspectionLogs.push(message.trim());
+    };
+    ffmpeg.on("log", inspectionListener);
+    try {
+      await ffmpeg.exec([
+        "-hide_banner",
+        "-i", inputName,
+        "-map", "0:a:0?",
+        "-frames:a", "1",
+        "-f", "null",
+        "-",
+      ]);
+    } catch {
+      // Stream information is still available in the captured FFmpeg log.
+    } finally {
+      ffmpeg.off("log", inspectionListener);
+      this.recentLogs = [];
+    }
+    return inspectionLogs.some((line) => /Stream #\d+:\d+.*\bAudio:/i.test(line));
   }
 
   async process(project: EngineProject, onProgress: EngineProgress) {
@@ -155,8 +163,8 @@ class BrowserVideoEngine {
         const duration = Math.max(0.05, clip.trimEnd - clip.trimStart);
         const videoFilter = [
           `setpts=PTS/${clip.speed}`,
-          `scale=${width}:${height}:force_original_aspect_ratio=decrease`,
-          `pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2`,
+          `scale=${width}:${height}:force_original_aspect_ratio=increase`,
+          `crop=${width}:${height}:(iw-ow)/2:(ih-oh)/2`,
           "setsar=1",
         ].join(",");
 

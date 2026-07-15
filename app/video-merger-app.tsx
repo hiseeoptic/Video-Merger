@@ -49,7 +49,7 @@ function emptyProject(id = newId("project"), index = 1, name?: string): Project 
     name: name || `Dự án ${String(index).padStart(2, "0")}`,
     clips: [],
     quality: "720p",
-    aspect: "16:9",
+    aspect: "9:16",
     muted: false,
     status: "idle",
     progress: 0,
@@ -156,7 +156,7 @@ export function VideoMergerApp() {
   const [isBatching, setIsBatching] = useState(false);
   const [batchSpeed, setBatchSpeed] = useState(1);
   const [batchQuality, setBatchQuality] = useState<Project["quality"]>("720p");
-  const [batchAspect, setBatchAspect] = useState<Project["aspect"]>("16:9");
+  const [batchAspect, setBatchAspect] = useState<Project["aspect"]>("9:16");
   const [batchMuted, setBatchMuted] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -193,7 +193,7 @@ export function VideoMergerApp() {
     if (!previewVideoRef.current || !selectedClip) return;
     previewVideoRef.current.defaultPlaybackRate = selectedClip.speed;
     previewVideoRef.current.playbackRate = selectedClip.speed;
-  }, [selectedClip?.id, selectedClip?.speed, selectedClip?.url]);
+  }, [selectedClip]);
 
   const updateProject = useCallback((projectId: string, updater: (project: Project) => Project) => {
     setProjects((current) => {
@@ -355,6 +355,22 @@ export function VideoMergerApp() {
       return next;
     });
     showToast(`Đã áp dụng tốc độ ${speed}× cho ${projectCountWithClips || projects.length} dự án.`);
+  };
+
+  const applyBatchAspect = (aspect: Project["aspect"]) => {
+    setBatchAspect(aspect);
+    setProjects((current) => {
+      const next = current.map((project) => ({
+        ...project,
+        aspect,
+        status: project.clips.length ? "idle" as const : project.status,
+        progress: project.clips.length ? 0 : project.progress,
+        statusText: project.clips.length ? `Đã đặt khung hình ${aspect}` : project.statusText,
+      }));
+      projectsRef.current = next;
+      return next;
+    });
+    showToast(`Đã áp dụng khung hình ${aspect} cho ${projectCountWithClips || projects.length} dự án.`);
   };
 
   const notifyExtension = (project: Project) => {
@@ -554,7 +570,7 @@ export function VideoMergerApp() {
                   preload="metadata"
                   onLoadedMetadata={(event) => { event.currentTarget.playbackRate = selectedClip.speed; }}
                 />
-                <span className="preview-badge">XEM TRƯỚC · {selectedClip.speed}×</span>
+                <span className="preview-badge">XEM TRƯỚC · {activeProject.aspect} · {selectedClip.speed}×</span>
               </div>
             ) : (
               <div
@@ -678,9 +694,9 @@ export function VideoMergerApp() {
           <div className="setting-row">
             <label>
               Tỉ lệ khung hình
-              <select value={batchAspect} onChange={(event) => setBatchAspect(event.target.value as Project["aspect"])}>
+              <select value={batchAspect} onChange={(event) => applyBatchAspect(event.target.value as Project["aspect"])}>
+                <option value="9:16">9:16 — Dọc (mặc định)</option>
                 <option value="16:9">16:9 — Ngang</option>
-                <option value="9:16">9:16 — Dọc</option>
                 <option value="1:1">1:1 — Vuông</option>
               </select>
             </label>

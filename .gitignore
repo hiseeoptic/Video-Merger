@@ -17,6 +17,7 @@
 /.next/
 /.vinext/
 /out/
+/public/ffmpeg/
 
 # misc
 .DS_Store
@@ -37,4 +38,5 @@ yarn-error.log*
 
 # typescript
 next-env.d.ts
+*.tsbuildinfo
 /.wrangler/

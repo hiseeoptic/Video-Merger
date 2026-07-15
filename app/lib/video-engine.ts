@@ -17,7 +17,7 @@ export type EngineProject = {
 
 type EngineProgress = (progress: number, message: string) => void;
 
-const CORE_BASE = "https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.10/dist/umd";
+const CORE_BASE = "/ffmpeg";
 
 function outputSize(quality: EngineProject["quality"], aspect: EngineProject["aspect"]) {
   const longEdge = quality === "1080p" ? 1920 : 1280;
@@ -33,37 +33,103 @@ function safeExtension(fileName: string) {
   return /^[a-z0-9]{2,5}$/.test(extension) ? extension : "mp4";
 }
 
+function unknownErrorMessage(error: unknown) {
+  if (error instanceof Error && error.message.trim()) return error.message.trim();
+  if (typeof error === "string" && error.trim()) return error.trim().replace(/^Error:\s*/i, "");
+  if (error && typeof error === "object" && "message" in error && typeof error.message === "string") {
+    return error.message.trim();
+  }
+  return "Lỗi không xác định.";
+}
+
+function audioTempoFilter(speed: number) {
+  const filters: string[] = [];
+  let remaining = speed;
+  while (remaining > 2) {
+    filters.push("atempo=2");
+    remaining /= 2;
+  }
+  filters.push(`atempo=${remaining.toFixed(4)}`);
+  return filters.join(",");
+}
+
 class BrowserVideoEngine {
   private ffmpeg: import("@ffmpeg/ffmpeg").FFmpeg | null = null;
   private progressListener: ((event: { progress: number; time: number }) => void) | null = null;
+  private logListener: ((event: { type: string; message: string }) => void) | null = null;
   private progressSink: ((progress: number) => void) | null = null;
+  private recentLogs: string[] = [];
+
+  private latestFailureLog() {
+    const useful = [...this.recentLogs].reverse().find((line) => /error|failed|invalid|unknown|not found|cannot|unable/i.test(line));
+    return useful || this.recentLogs.at(-1) || "";
+  }
+
+  private failureMessage(error: unknown) {
+    const message = unknownErrorMessage(error);
+    const log = this.latestFailureLog();
+    return log && !message.includes(log) ? `${message} ${log}` : message;
+  }
 
   async load(onStatus?: (message: string) => void) {
     if (this.ffmpeg?.loaded) return this.ffmpeg;
 
     onStatus?.("Đang tải bộ máy xử lý video…");
-    const [{ FFmpeg }, { toBlobURL }] = await Promise.all([
-      import("@ffmpeg/ffmpeg"),
-      import("@ffmpeg/util"),
-    ]);
+    const { FFmpeg } = await import("@ffmpeg/ffmpeg");
     const ffmpeg = new FFmpeg();
+    this.recentLogs = [];
     this.progressListener = ({ progress }) => this.progressSink?.(Math.max(0, Math.min(1, progress)));
+    this.logListener = ({ message }) => {
+      if (!message.trim()) return;
+      this.recentLogs.push(message.trim());
+      if (this.recentLogs.length > 100) this.recentLogs.shift();
+    };
     ffmpeg.on("progress", this.progressListener);
+    ffmpeg.on("log", this.logListener);
 
-    const [coreURL, wasmURL] = await Promise.all([
-      toBlobURL(`${CORE_BASE}/ffmpeg-core.js`, "text/javascript"),
-      toBlobURL(`${CORE_BASE}/ffmpeg-core.wasm`, "application/wasm"),
-    ]);
-    await ffmpeg.load({ coreURL, wasmURL });
+    try {
+      await ffmpeg.load({
+        coreURL: `${CORE_BASE}/ffmpeg-core.js`,
+        wasmURL: `${CORE_BASE}/ffmpeg-core.wasm`,
+      });
+    } catch (error) {
+      ffmpeg.terminate();
+      this.progressListener = null;
+      this.logListener = null;
+      throw new Error(`Không thể khởi động bộ xử lý video: ${this.failureMessage(error)}`);
+    }
     this.ffmpeg = ffmpeg;
     return ffmpeg;
   }
 
   cancel() {
+    if (this.ffmpeg && this.progressListener) this.ffmpeg.off("progress", this.progressListener);
+    if (this.ffmpeg && this.logListener) this.ffmpeg.off("log", this.logListener);
     this.ffmpeg?.terminate();
     this.ffmpeg = null;
     this.progressListener = null;
+    this.logListener = null;
     this.progressSink = null;
+    this.recentLogs = [];
+  }
+
+  private async inputHasAudio(
+    ffmpeg: import("@ffmpeg/ffmpeg").FFmpeg,
+    inputName: string,
+    probeName: string,
+  ) {
+    const exitCode = await ffmpeg.ffprobe([
+      "-v", "error",
+      "-select_streams", "a:0",
+      "-show_entries", "stream=index",
+      "-of", "csv=p=0",
+      inputName,
+      "-o", probeName,
+    ]);
+    if (exitCode !== 0) throw new Error(`Không thể đọc luồng âm thanh. ${this.latestFailureLog()}`.trim());
+    const probeData = await ffmpeg.readFile(probeName, "utf8");
+    const probeText = typeof probeData === "string" ? probeData : new TextDecoder().decode(probeData);
+    return Boolean(probeText.trim());
   }
 
   async process(project: EngineProject, onProgress: EngineProgress) {
@@ -78,11 +144,13 @@ class BrowserVideoEngine {
         const clip = project.clips[index];
         const inputName = `input_${project.id}_${index}.${safeExtension(clip.file.name)}`;
         const segmentName = `segment_${project.id}_${index}.mp4`;
-        createdFiles.push(inputName, segmentName);
+        const probeName = `probe_${project.id}_${index}.txt`;
+        createdFiles.push(inputName, segmentName, probeName);
         segmentNames.push(segmentName);
 
         onProgress(0.05 + (index / project.clips.length) * 0.76, `Đang xử lý clip ${index + 1}/${project.clips.length}`);
         await ffmpeg.writeFile(inputName, new Uint8Array(await clip.file.arrayBuffer()));
+        const hasAudio = !project.muted && await this.inputHasAudio(ffmpeg, inputName, probeName);
 
         const duration = Math.max(0.05, clip.trimEnd - clip.trimStart);
         const videoFilter = [
@@ -96,15 +164,23 @@ class BrowserVideoEngine {
           "-ss", clip.trimStart.toFixed(3),
           "-t", duration.toFixed(3),
           "-i", inputName,
-          "-map", "0:v:0",
-          "-map", "0:a:0?",
-          "-vf", videoFilter,
         ];
+
+        if (!project.muted && !hasAudio) {
+          args.push("-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000");
+        }
+
+        args.push(
+          "-map", "0:v:0",
+          "-vf", videoFilter,
+        );
 
         if (project.muted) {
           args.push("-an");
+        } else if (hasAudio) {
+          args.push("-map", "0:a:0", "-af", `${audioTempoFilter(clip.speed)},apad`, "-c:a", "aac", "-ar", "48000", "-ac", "2", "-b:a", "160k", "-shortest");
         } else {
-          args.push("-af", `atempo=${clip.speed}`, "-c:a", "aac", "-ar", "48000", "-ac", "2", "-b:a", "160k");
+          args.push("-map", "1:a:0", "-c:a", "aac", "-ar", "48000", "-ac", "2", "-b:a", "160k", "-shortest");
         }
 
         args.push(
@@ -121,8 +197,9 @@ class BrowserVideoEngine {
           onProgress(base + clipProgress * (0.76 / project.clips.length), `Đang xử lý clip ${index + 1}/${project.clips.length}`);
         };
         const exitCode = await ffmpeg.exec(args);
-        if (exitCode !== 0) throw new Error(`Không thể xử lý clip ${index + 1}.`);
+        if (exitCode !== 0) throw new Error(`Không thể xử lý clip ${index + 1}. ${this.latestFailureLog()}`.trim());
         await ffmpeg.deleteFile(inputName);
+        await ffmpeg.deleteFile(probeName);
       }
 
       const listName = `concat_${project.id}.txt`;
@@ -139,13 +216,16 @@ class BrowserVideoEngine {
         "-movflags", "+faststart",
         outputName,
       ]);
-      if (concatExitCode !== 0) throw new Error("Không thể nối các clip.");
+      if (concatExitCode !== 0) throw new Error(`Không thể nối các clip. ${this.latestFailureLog()}`.trim());
 
       const data = await ffmpeg.readFile(outputName);
       if (typeof data === "string") throw new Error("Dữ liệu video đầu ra không hợp lệ.");
       const copy = Uint8Array.from(data);
       onProgress(1, "Đã hoàn tất");
       return new Blob([copy.buffer], { type: "video/mp4" });
+    } catch (error) {
+      if (error instanceof Error && /^(Không thể|Dữ liệu)/.test(error.message)) throw error;
+      throw new Error(`Không thể xử lý video: ${this.failureMessage(error)}`);
     } finally {
       this.progressSink = null;
       for (const fileName of createdFiles) {

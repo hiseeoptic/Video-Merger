@@ -76,6 +76,13 @@ function totalDuration(project: Project) {
   return project.clips.reduce((sum, clip) => sum + Math.max(0, clip.trimEnd - clip.trimStart) / clip.speed, 0);
 }
 
+function readableError(error: unknown) {
+  if (error instanceof Error && error.message.trim()) return error.message;
+  if (typeof error === "string" && error.trim()) return error;
+  if (error && typeof error === "object" && "message" in error && typeof error.message === "string") return error.message;
+  return "Không thể xử lý video.";
+}
+
 function videoMetadata(file: File): Promise<Omit<Clip, "id" | "file" | "name" | "size" | "speed" | "trimStart" | "trimEnd">> {
   return new Promise((resolve, reject) => {
     const url = URL.createObjectURL(file);
@@ -357,7 +364,7 @@ export function VideoMergerApp() {
       notifyExtension(completed);
       return true;
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Không thể xử lý video.";
+      const message = readableError(error);
       updateProject(projectId, (current) => ({ ...current, status: "error", statusText: "Xử lý thất bại", error: message }));
       showToast(message.includes("fetch") ? "Không tải được bộ xử lý FFmpeg. Hãy kiểm tra kết nối mạng." : message);
       return false;
@@ -384,12 +391,20 @@ export function VideoMergerApp() {
     cancelledRef.current = false;
     setIsBatching(true);
     setProjects((current) => current.map((project) => ids.includes(project.id) ? { ...project, status: "queued", progress: 0, statusText: "Đang chờ" } : project));
+    let completedCount = 0;
+    let failedCount = 0;
     for (const id of ids) {
       if (cancelledRef.current) break;
-      await processProject(id);
+      const completed = await processProject(id);
+      if (completed) completedCount += 1;
+      else failedCount += 1;
     }
     setIsBatching(false);
-    if (!cancelledRef.current) showToast(`Đã xử lý xong ${ids.length} dự án.`);
+    if (!cancelledRef.current) {
+      showToast(failedCount
+        ? `Hoàn tất: ${completedCount} thành công, ${failedCount} thất bại.`
+        : `Đã xử lý thành công ${completedCount} dự án.`);
+    }
   };
 
   const stopExport = () => {

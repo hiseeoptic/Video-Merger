@@ -9,12 +9,13 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
+    "postinstall": "node scripts/copy-ffmpeg-assets.mjs",
     "test": "npm run build",
     "lint": "eslint app next.config.ts"
   },
   "dependencies": {
+    "@ffmpeg/core": "0.12.10",
     "@ffmpeg/ffmpeg": "^0.12.15",
-    "@ffmpeg/util": "^0.12.2",
     "next": "16.2.6",
     "react": "19.2.6",
     "react-dom": "19.2.6"

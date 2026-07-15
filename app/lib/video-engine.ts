@@ -116,20 +116,20 @@ class BrowserVideoEngine {
   private async inputHasAudio(
     ffmpeg: import("@ffmpeg/ffmpeg").FFmpeg,
     inputName: string,
-    probeName: string,
   ) {
-    const exitCode = await ffmpeg.ffprobe([
-      "-v", "error",
-      "-select_streams", "a:0",
-      "-show_entries", "stream=index",
-      "-of", "csv=p=0",
-      inputName,
-      "-o", probeName,
+    const logStart = this.recentLogs.length;
+    await ffmpeg.exec([
+      "-hide_banner",
+      "-i", inputName,
+      "-t", "0",
+      "-map", "0:v:0?",
+      "-map", "0:a:0?",
+      "-f", "null",
+      "-",
     ]);
-    if (exitCode !== 0) throw new Error(`Không thể đọc luồng âm thanh. ${this.latestFailureLog()}`.trim());
-    const probeData = await ffmpeg.readFile(probeName, "utf8");
-    const probeText = typeof probeData === "string" ? probeData : new TextDecoder().decode(probeData);
-    return Boolean(probeText.trim());
+    const inspectionLogs = this.recentLogs.slice(logStart);
+    this.recentLogs.splice(logStart);
+    return inspectionLogs.some((line) => /Stream #\d+:\d+[^:]*: Audio:/i.test(line));
   }
 
   async process(project: EngineProject, onProgress: EngineProgress) {
@@ -144,13 +144,13 @@ class BrowserVideoEngine {
         const clip = project.clips[index];
         const inputName = `input_${project.id}_${index}.${safeExtension(clip.file.name)}`;
         const segmentName = `segment_${project.id}_${index}.mp4`;
-        const probeName = `probe_${project.id}_${index}.txt`;
-        createdFiles.push(inputName, segmentName, probeName);
+        createdFiles.push(inputName, segmentName);
         segmentNames.push(segmentName);
 
         onProgress(0.05 + (index / project.clips.length) * 0.76, `Đang xử lý clip ${index + 1}/${project.clips.length}`);
         await ffmpeg.writeFile(inputName, new Uint8Array(await clip.file.arrayBuffer()));
-        const hasAudio = !project.muted && await this.inputHasAudio(ffmpeg, inputName, probeName);
+        this.progressSink = null;
+        const hasAudio = !project.muted && await this.inputHasAudio(ffmpeg, inputName);
 
         const duration = Math.max(0.05, clip.trimEnd - clip.trimStart);
         const videoFilter = [
@@ -199,7 +199,6 @@ class BrowserVideoEngine {
         const exitCode = await ffmpeg.exec(args);
         if (exitCode !== 0) throw new Error(`Không thể xử lý clip ${index + 1}. ${this.latestFailureLog()}`.trim());
         await ffmpeg.deleteFile(inputName);
-        await ffmpeg.deleteFile(probeName);
       }
 
       const listName = `concat_${project.id}.txt`;

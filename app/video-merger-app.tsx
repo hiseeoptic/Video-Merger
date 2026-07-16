@@ -49,16 +49,23 @@ type FileHandleLike = {
 type DirectoryHandleLike = {
   name: string;
   getFileHandle(name: string, options?: { create?: boolean }): Promise<FileHandleLike>;
+  queryPermission?(options: { mode: "readwrite" }): Promise<PermissionState>;
+  requestPermission?(options: { mode: "readwrite" }): Promise<PermissionState>;
 };
 
 type DirectoryPickerWindow = Window & {
   showDirectoryPicker?: (options?: { id?: string; mode?: "read" | "readwrite" }) => Promise<DirectoryHandleLike>;
 };
 
+type DirectoryStatus = "none" | "restoring" | "connected" | "needs-permission" | "blocked" | "unsupported";
+
 const SPEEDS = [0.5, 0.75, 1, 1.1, 1.2, 1.3, 1.4, 1.5, 1.75, 2, 2.5, 3, 4];
 const SPEED_PRESETS = [1, 1.1, 1.2, 1.3];
 const MAX_PROJECTS = 5;
 const MAX_CLIPS = 12;
+const HANDLE_DB_NAME = "cutflow-file-handles";
+const HANDLE_STORE_NAME = "handles";
+const EXPORT_DIRECTORY_KEY = "export-directory";
 
 function newId(prefix: string) {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
@@ -102,6 +109,64 @@ async function nextAvailableFileName(directory: DirectoryHandleLike, preferredNa
     suffix += 1;
   }
   return candidate;
+}
+
+function openHandleDatabase() {
+  return new Promise<IDBDatabase>((resolve, reject) => {
+    const request = window.indexedDB.open(HANDLE_DB_NAME, 1);
+    request.onupgradeneeded = () => {
+      if (!request.result.objectStoreNames.contains(HANDLE_STORE_NAME)) {
+        request.result.createObjectStore(HANDLE_STORE_NAME);
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function persistDirectoryHandle(directory: DirectoryHandleLike) {
+  const database = await openHandleDatabase();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const transaction = database.transaction(HANDLE_STORE_NAME, "readwrite");
+      transaction.objectStore(HANDLE_STORE_NAME).put(directory, EXPORT_DIRECTORY_KEY);
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error);
+      transaction.onabort = () => reject(transaction.error);
+    });
+  } finally {
+    database.close();
+  }
+}
+
+async function restoreDirectoryHandle() {
+  const database = await openHandleDatabase();
+  try {
+    return await new Promise<DirectoryHandleLike | null>((resolve, reject) => {
+      const transaction = database.transaction(HANDLE_STORE_NAME, "readonly");
+      const request = transaction.objectStore(HANDLE_STORE_NAME).get(EXPORT_DIRECTORY_KEY);
+      request.onsuccess = () => resolve((request.result as DirectoryHandleLike | undefined) || null);
+      request.onerror = () => reject(request.error);
+    });
+  } finally {
+    database.close();
+  }
+}
+
+async function directoryHasWritePermission(directory: DirectoryHandleLike, requestAccess = false) {
+  if (!directory.queryPermission) return true;
+  if (await directory.queryPermission({ mode: "readwrite" }) === "granted") return true;
+  if (!requestAccess || !directory.requestPermission) return false;
+  return await directory.requestPermission({ mode: "readwrite" }) === "granted";
+}
+
+function isCrossOriginFrame() {
+  if (window.self === window.top) return false;
+  try {
+    return window.top?.location.origin !== window.location.origin;
+  } catch {
+    return true;
+  }
 }
 
 function emptyProject(id = newId("project"), index = 1, name?: string): Project {
@@ -225,6 +290,7 @@ export function VideoMergerApp() {
   const [toast, setToast] = useState<string | null>(null);
   const [uiLang, setUiLang] = useState<Lang>("vi");
   const [downloadDirectoryName, setDownloadDirectoryName] = useState("");
+  const [directoryStatus, setDirectoryStatus] = useState<DirectoryStatus>("restoring");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const previewVideoRef = useRef<HTMLVideoElement>(null);
   const downloadDirectoryRef = useRef<DirectoryHandleLike | null>(null);
@@ -235,6 +301,40 @@ export function VideoMergerApp() {
   useEffect(() => {
     projectsRef.current = projects;
   }, [projects]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (isCrossOriginFrame()) {
+      const blockedTimer = window.setTimeout(() => setDirectoryStatus("blocked"), 0);
+      return () => {
+        cancelled = true;
+        window.clearTimeout(blockedTimer);
+      };
+    }
+    if (typeof (window as DirectoryPickerWindow).showDirectoryPicker !== "function") {
+      const unsupportedTimer = window.setTimeout(() => setDirectoryStatus("unsupported"), 0);
+      return () => {
+        cancelled = true;
+        window.clearTimeout(unsupportedTimer);
+      };
+    }
+    void restoreDirectoryHandle()
+      .then(async (directory) => {
+        if (cancelled) return;
+        if (!directory) {
+          setDirectoryStatus("none");
+          return;
+        }
+        downloadDirectoryRef.current = directory;
+        setDownloadDirectoryName(directory.name);
+        const connected = await directoryHasWritePermission(directory);
+        if (!cancelled) setDirectoryStatus(connected ? "connected" : "needs-permission");
+      })
+      .catch(() => {
+        if (!cancelled) setDirectoryStatus("none");
+      });
+    return () => { cancelled = true; };
+  }, []);
 
   // Bảng chuỗi theo ngôn ngữ hiện tại. tRef để các useCallback dùng bản mới
   // nhất mà không phải thêm dependency.
@@ -281,20 +381,65 @@ export function VideoMergerApp() {
   }, []);
 
   const chooseDownloadDirectory = async () => {
+    if (isCrossOriginFrame()) {
+      setDirectoryStatus("blocked");
+      showToast(t.toast_folder_blocked);
+      return;
+    }
     const picker = (window as DirectoryPickerWindow).showDirectoryPicker;
     if (!picker) {
+      setDirectoryStatus("unsupported");
       showToast(t.toast_folder_unsupported);
       return;
     }
     try {
       const directory = await picker.call(window, { id: "cutflow-exports", mode: "readwrite" });
+      const connected = await directoryHasWritePermission(directory, true);
+      if (!connected) {
+        setDirectoryStatus("needs-permission");
+        showToast(t.toast_folder_permission_denied);
+        return;
+      }
       downloadDirectoryRef.current = directory;
       setDownloadDirectoryName(directory.name);
+      setDirectoryStatus("connected");
+      try { await persistDirectoryHandle(directory); } catch { /* private mode */ }
       showToast(t.toast_folder_selected(directory.name));
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") return;
-      showToast(t.toast_folder_failed);
+      if (error instanceof DOMException && error.name === "SecurityError") {
+        setDirectoryStatus("blocked");
+        showToast(t.toast_folder_blocked);
+        return;
+      }
+      setDirectoryStatus("needs-permission");
+      showToast(`${t.toast_folder_failed}${error instanceof Error ? ` (${error.name})` : ""}`);
     }
+  };
+
+  const reconnectDownloadDirectory = async () => {
+    const directory = downloadDirectoryRef.current;
+    if (!directory) {
+      await chooseDownloadDirectory();
+      return;
+    }
+    if (isCrossOriginFrame()) {
+      setDirectoryStatus("blocked");
+      showToast(t.toast_folder_blocked);
+      return;
+    }
+    try {
+      const connected = await directoryHasWritePermission(directory, true);
+      setDirectoryStatus(connected ? "connected" : "needs-permission");
+      showToast(connected ? t.toast_folder_selected(directory.name) : t.toast_folder_permission_denied);
+    } catch (error) {
+      setDirectoryStatus(error instanceof DOMException && error.name === "SecurityError" ? "blocked" : "needs-permission");
+      showToast(error instanceof DOMException && error.name === "SecurityError" ? t.toast_folder_blocked : t.toast_folder_permission_denied);
+    }
+  };
+
+  const openStandaloneApp = () => {
+    window.open(`${window.location.origin}${window.location.pathname}?folder-access=1`, "_blank", "noopener,noreferrer");
   };
 
   const activeProject = projects.find((project) => project.id === activeProjectId) || projects[0];
@@ -319,6 +464,9 @@ export function VideoMergerApp() {
   const saveOutputToDirectory = useCallback(async (project: Project, output: Blob) => {
     const directory = downloadDirectoryRef.current;
     if (!directory) return null;
+    if (!await directoryHasWritePermission(directory)) {
+      throw new DOMException("Write permission is not granted", "NotAllowedError");
+    }
     const fileName = await nextAvailableFileName(directory, projectOutputFileName(project));
     const fileHandle = await directory.getFileHandle(fileName, { create: true });
     const writable = await fileHandle.createWritable();
@@ -536,6 +684,7 @@ export function VideoMergerApp() {
         savedFileName = await saveOutputToDirectory(project, output) || undefined;
         if (savedFileName) showToast(tRef.current.toast_saved_to_folder(savedFileName));
       } catch {
+        setDirectoryStatus("needs-permission");
         showToast(tRef.current.toast_save_failed);
       }
       const completed = { ...project, outputUrl, savedFileName };
@@ -557,11 +706,30 @@ export function VideoMergerApp() {
     }
   }, [saveOutputToDirectory, showToast, updateProject]);
 
+  const prepareDownloadDirectory = async () => {
+    const directory = downloadDirectoryRef.current;
+    if (!directory) return;
+    if (isCrossOriginFrame()) {
+      setDirectoryStatus("blocked");
+      showToast(t.toast_folder_blocked);
+      return;
+    }
+    try {
+      const connected = await directoryHasWritePermission(directory, true);
+      setDirectoryStatus(connected ? "connected" : "needs-permission");
+      if (!connected) showToast(t.toast_folder_permission_denied);
+    } catch {
+      setDirectoryStatus("needs-permission");
+      showToast(t.toast_folder_permission_denied);
+    }
+  };
+
   const exportActive = async () => {
     if (!activeProject.clips.length) {
       showToast(t.toast_no_clips_active);
       return;
     }
+    await prepareDownloadDirectory();
     cancelledRef.current = false;
     setIsBatching(true);
     await processProject(activeProject.id);
@@ -574,6 +742,7 @@ export function VideoMergerApp() {
       showToast(t.toast_no_projects);
       return;
     }
+    await prepareDownloadDirectory();
     cancelledRef.current = false;
     setIsBatching(true);
     setProjects((current) => current.map((project) => ids.includes(project.id) ? { ...project, status: "queued", progress: 0, statusText: "Đang chờ" } : project));
@@ -875,14 +1044,28 @@ export function VideoMergerApp() {
             <button
               type="button"
               className="folder-button"
-              onClick={chooseDownloadDirectory}
+              onClick={directoryStatus === "blocked" ? openStandaloneApp : directoryStatus === "needs-permission" ? reconnectDownloadDirectory : chooseDownloadDirectory}
+              disabled={directoryStatus === "restoring"}
             >
-              <span>⌁</span>{downloadDirectoryName ? t.change_folder : t.choose_folder}
+              <span>⌁</span>
+              {directoryStatus === "blocked"
+                ? t.open_standalone
+                : directoryStatus === "needs-permission"
+                  ? t.reconnect_folder
+                  : downloadDirectoryName ? t.change_folder : t.choose_folder}
             </button>
-            <small className={downloadDirectoryName ? "folder-state selected" : "folder-state"}>
-              {downloadDirectoryName
-                ? t.folder_selected(downloadDirectoryName)
-                : t.folder_default}
+            <small className={directoryStatus === "connected" ? "folder-state selected" : directoryStatus === "blocked" || directoryStatus === "needs-permission" ? "folder-state warning" : "folder-state"}>
+              {directoryStatus === "restoring"
+                ? t.folder_restoring
+                : directoryStatus === "connected" && downloadDirectoryName
+                  ? t.folder_selected(downloadDirectoryName)
+                  : directoryStatus === "needs-permission" && downloadDirectoryName
+                    ? t.folder_needs_permission(downloadDirectoryName)
+                    : directoryStatus === "blocked"
+                      ? t.folder_blocked
+                      : directoryStatus === "unsupported"
+                        ? t.folder_unsupported
+                        : t.folder_default}
             </small>
           </div>
 

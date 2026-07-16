@@ -79,8 +79,13 @@ type Messages = {
   output_filename_placeholder: string;
   choose_folder: string;
   change_folder: string;
+  reconnect_folder: string;
+  open_standalone: string;
   folder_default: string;
+  folder_restoring: string;
   folder_selected: (name: string) => string;
+  folder_needs_permission: (name: string) => string;
+  folder_blocked: string;
   folder_unsupported: string;
   saved_file: (name: string) => string;
   queue_heading: string;
@@ -109,6 +114,8 @@ type Messages = {
   toast_folder_unsupported: string;
   toast_folder_selected: (name: string) => string;
   toast_folder_failed: string;
+  toast_folder_blocked: string;
+  toast_folder_permission_denied: string;
   toast_saved_to_folder: (name: string) => string;
   toast_save_failed: string;
   toast_ffmpeg_network: string;
@@ -188,8 +195,13 @@ export const MESSAGES: Record<Lang, Messages> = {
     output_filename_placeholder: "Nhập tên video",
     choose_folder: "Chọn thư mục lưu",
     change_folder: "Đổi thư mục lưu",
+    reconnect_folder: "Kết nối lại thư mục",
+    open_standalone: "Mở app riêng để kết nối",
     folder_default: "Chưa chọn · sẽ tải về thư mục mặc định",
+    folder_restoring: "Đang kiểm tra kết nối thư mục…",
     folder_selected: (name) => `Tự động lưu vào: ${name}`,
+    folder_needs_permission: (name) => `${name} · cần cấp lại quyền ghi`,
+    folder_blocked: "Khung extension bị Chrome chặn truy cập thư mục. Hãy mở app ở tab riêng.",
     folder_unsupported: "Trình duyệt này chưa hỗ trợ chọn thư mục",
     saved_file: (name) => `Đã lưu ${name}`,
     queue_heading: "HÀNG ĐỢI XUẤT",
@@ -217,6 +229,8 @@ export const MESSAGES: Record<Lang, Messages> = {
     toast_folder_unsupported: "Trình duyệt này chưa hỗ trợ chọn thư mục. Video vẫn có thể tải theo cách thông thường.",
     toast_folder_selected: (name) => `Đã chọn thư mục ${name}. Video xuất sẽ tự động lưu tại đây.`,
     toast_folder_failed: "Không thể mở thư mục đã chọn.",
+    toast_folder_blocked: "Chrome không cho iframe của extension mở thư mục máy tính. Hãy bấm Mở app riêng để kết nối.",
+    toast_folder_permission_denied: "Thư mục chưa được cấp quyền ghi. Hãy bấm Kết nối lại thư mục.",
     toast_saved_to_folder: (name) => `Đã lưu ${name} vào thư mục bạn chọn.`,
     toast_save_failed: "Video đã xử lý xong nhưng không thể ghi vào thư mục. Bạn vẫn có thể dùng nút tải xuống.",
     toast_ffmpeg_network: "Không tải được bộ xử lý FFmpeg. Hãy kiểm tra kết nối mạng.",
@@ -294,8 +308,13 @@ export const MESSAGES: Record<Lang, Messages> = {
     output_filename_placeholder: "Enter video name",
     choose_folder: "Choose save folder",
     change_folder: "Change save folder",
+    reconnect_folder: "Reconnect folder",
+    open_standalone: "Open app to connect",
     folder_default: "Not selected · downloads use the browser default",
+    folder_restoring: "Checking folder connection…",
     folder_selected: (name) => `Auto-save to: ${name}`,
+    folder_needs_permission: (name) => `${name} · write access required`,
+    folder_blocked: "Chrome blocks folder access inside the extension frame. Open the app in its own tab.",
     folder_unsupported: "Folder selection is not supported in this browser",
     saved_file: (name) => `Saved ${name}`,
     queue_heading: "EXPORT QUEUE",
@@ -323,6 +342,8 @@ export const MESSAGES: Record<Lang, Messages> = {
     toast_folder_unsupported: "This browser cannot choose a save folder. You can still use normal downloads.",
     toast_folder_selected: (name) => `Selected ${name}. Exported videos will be saved there automatically.`,
     toast_folder_failed: "Could not open the selected folder.",
+    toast_folder_blocked: "Chrome does not allow an extension iframe to open computer folders. Open the app in its own tab to connect.",
+    toast_folder_permission_denied: "Write access has not been granted. Reconnect the folder.",
     toast_saved_to_folder: (name) => `Saved ${name} to your selected folder.`,
     toast_save_failed: "The video finished processing but could not be written to the folder. Use the download button instead.",
     toast_ffmpeg_network: "Could not load the FFmpeg engine. Check your connection.",
@@ -400,8 +421,13 @@ export const MESSAGES: Record<Lang, Messages> = {
     output_filename_placeholder: "Nom de la vidéo",
     choose_folder: "Choisir le dossier",
     change_folder: "Changer de dossier",
+    reconnect_folder: "Reconnecter le dossier",
+    open_standalone: "Ouvrir l'app pour connecter",
     folder_default: "Non sélectionné · téléchargement par défaut",
+    folder_restoring: "Vérification de la connexion au dossier…",
     folder_selected: (name) => `Enregistrement automatique dans : ${name}`,
+    folder_needs_permission: (name) => `${name} · autorisation d'écriture requise`,
+    folder_blocked: "Chrome bloque l'accès aux dossiers dans l'iframe de l'extension. Ouvrez l'app dans un onglet séparé.",
     folder_unsupported: "La sélection de dossier n'est pas prise en charge",
     saved_file: (name) => `${name} enregistré`,
     queue_heading: "FILE D'EXPORT",
@@ -429,6 +455,8 @@ export const MESSAGES: Record<Lang, Messages> = {
     toast_folder_unsupported: "Ce navigateur ne permet pas de choisir un dossier. Le téléchargement normal reste disponible.",
     toast_folder_selected: (name) => `Dossier ${name} sélectionné. Les vidéos y seront enregistrées automatiquement.`,
     toast_folder_failed: "Impossible d'ouvrir le dossier sélectionné.",
+    toast_folder_blocked: "Chrome interdit à l'iframe de l'extension d'ouvrir les dossiers. Ouvrez l'app dans un onglet séparé.",
+    toast_folder_permission_denied: "L'autorisation d'écriture n'est pas accordée. Reconnectez le dossier.",
     toast_saved_to_folder: (name) => `${name} a été enregistré dans le dossier sélectionné.`,
     toast_save_failed: "La vidéo est prête, mais l'écriture dans le dossier a échoué. Utilisez le bouton de téléchargement.",
     toast_ffmpeg_network: "Impossible de charger FFmpeg. Vérifiez votre connexion.",
@@ -506,8 +534,13 @@ export const MESSAGES: Record<Lang, Messages> = {
     output_filename_placeholder: "输入视频名称",
     choose_folder: "选择保存文件夹",
     change_folder: "更改保存文件夹",
+    reconnect_folder: "重新连接文件夹",
+    open_standalone: "打开应用进行连接",
     folder_default: "未选择 · 使用浏览器默认下载位置",
+    folder_restoring: "正在检查文件夹连接…",
     folder_selected: (name) => `自动保存到：${name}`,
+    folder_needs_permission: (name) => `${name} · 需要写入权限`,
+    folder_blocked: "Chrome 会阻止扩展 iframe 访问文件夹。请在独立标签页中打开应用。",
     folder_unsupported: "此浏览器不支持选择文件夹",
     saved_file: (name) => `已保存 ${name}`,
     queue_heading: "导出队列",
@@ -535,6 +568,8 @@ export const MESSAGES: Record<Lang, Messages> = {
     toast_folder_unsupported: "此浏览器不支持选择保存文件夹，仍可使用普通下载。",
     toast_folder_selected: (name) => `已选择 ${name}，导出视频将自动保存到该文件夹。`,
     toast_folder_failed: "无法打开所选文件夹。",
+    toast_folder_blocked: "Chrome 不允许扩展 iframe 打开电脑文件夹。请在独立标签页中打开应用进行连接。",
+    toast_folder_permission_denied: "尚未授予写入权限，请重新连接文件夹。",
     toast_saved_to_folder: (name) => `已将 ${name} 保存到所选文件夹。`,
     toast_save_failed: "视频处理完成，但无法写入文件夹。请使用下载按钮。",
     toast_ffmpeg_network: "无法加载 FFmpeg 引擎，请检查网络连接。",

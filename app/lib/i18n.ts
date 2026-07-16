@@ -75,6 +75,12 @@ type Messages = {
   mute_label: string;
   mute_sub: string;
   apply_all: string;
+  smart_crop_title: string;
+  smart_crop_subtitle: string;
+  smart_crop_hint: string;
+  smart_crop_corner_label: string;
+  smart_crop_amount: string;
+  smart_crop_apply_all: string;
   blur_title: string;
   blur_subtitle: string;
   blur_drag_hint: string;
@@ -124,6 +130,7 @@ type Messages = {
   toast_batch_applied: (count: number) => string;
   toast_speed_applied: (speed: string, count: number) => string;
   toast_aspect_applied: (aspect: string, count: number) => string;
+  toast_smart_crop_applied: (count: number) => string;
   toast_blur_applied: (count: number) => string;
   toast_folder_unsupported: string;
   toast_folder_selected: (name: string) => string;
@@ -205,6 +212,12 @@ export const MESSAGES: Record<Lang, Messages> = {
     mute_label: "Tắt âm thanh",
     mute_sub: "Áp dụng cho toàn bộ clip",
     apply_all: "Áp dụng cho tất cả dự án",
+    smart_crop_title: "Cắt mép thông minh",
+    smart_crop_subtitle: "Cắt nhẹ góc và phóng kín khung, không viền đen",
+    smart_crop_hint: "Chọn góc cần loại bỏ. Mức 4% thường đủ tự nhiên; tăng dần nếu vùng ở mép còn xuất hiện.",
+    smart_crop_corner_label: "Góc cần cắt",
+    smart_crop_amount: "Mức cắt hai mép",
+    smart_crop_apply_all: "Áp dụng Smart Crop cho tất cả dự án",
     blur_title: "Làm mờ vùng cố định",
     blur_subtitle: "Dùng cho nội dung bạn có quyền chỉnh sửa",
     blur_drag_hint: "Kéo vùng mờ trên preview; kéo nút ở góc để đổi kích thước.",
@@ -253,6 +266,7 @@ export const MESSAGES: Record<Lang, Messages> = {
     toast_batch_applied: (count) => `Đã áp dụng cho ${count} dự án.`,
     toast_speed_applied: (speed, count) => `Đã áp dụng tốc độ ${speed}× cho ${count} dự án.`,
     toast_aspect_applied: (aspect, count) => `Đã áp dụng khung hình ${aspect} cho ${count} dự án.`,
+    toast_smart_crop_applied: (count) => `Đã áp dụng Smart Crop cho ${count} dự án.`,
     toast_blur_applied: (count) => `Đã áp dụng vùng mờ cho ${count} dự án.`,
     toast_folder_unsupported: "Trình duyệt này chưa hỗ trợ chọn thư mục. Video vẫn có thể tải theo cách thông thường.",
     toast_folder_selected: (name) => `Đã chọn thư mục ${name}. Video xuất sẽ tự động lưu tại đây.`,
@@ -332,6 +346,12 @@ export const MESSAGES: Record<Lang, Messages> = {
     mute_label: "Mute audio",
     mute_sub: "Applies to all clips",
     apply_all: "Apply to all projects",
+    smart_crop_title: "Smart edge crop",
+    smart_crop_subtitle: "Trim a corner and fill the frame without black bars",
+    smart_crop_hint: "Choose the corner to remove. Start at 4% and increase only if the edge area remains visible.",
+    smart_crop_corner_label: "Corner to crop",
+    smart_crop_amount: "Two-edge crop amount",
+    smart_crop_apply_all: "Apply Smart Crop to all projects",
     blur_title: "Blur a fixed region",
     blur_subtitle: "For content you have permission to edit",
     blur_drag_hint: "Drag the blur region on the preview; drag its corner to resize.",
@@ -380,6 +400,7 @@ export const MESSAGES: Record<Lang, Messages> = {
     toast_batch_applied: (count) => `Applied to ${count} projects.`,
     toast_speed_applied: (speed, count) => `Applied ${speed}× speed to ${count} projects.`,
     toast_aspect_applied: (aspect, count) => `Applied ${aspect} aspect to ${count} projects.`,
+    toast_smart_crop_applied: (count) => `Applied Smart Crop to ${count} projects.`,
     toast_blur_applied: (count) => `Applied the blur region to ${count} projects.`,
     toast_folder_unsupported: "This browser cannot choose a save folder. You can still use normal downloads.",
     toast_folder_selected: (name) => `Selected ${name}. Exported videos will be saved there automatically.`,
@@ -459,6 +480,12 @@ export const MESSAGES: Record<Lang, Messages> = {
     mute_label: "Couper le son",
     mute_sub: "S'applique à tous les clips",
     apply_all: "Appliquer à tous les projets",
+    smart_crop_title: "Recadrage intelligent des bords",
+    smart_crop_subtitle: "Couper légèrement un coin et remplir le cadre sans bandes noires",
+    smart_crop_hint: "Choisissez le coin à retirer. Commencez à 4 % et augmentez seulement si la zone reste visible.",
+    smart_crop_corner_label: "Coin à recadrer",
+    smart_crop_amount: "Recadrage des deux bords",
+    smart_crop_apply_all: "Appliquer Smart Crop à tous les projets",
     blur_title: "Flouter une zone fixe",
     blur_subtitle: "Pour les contenus que vous êtes autorisé à modifier",
     blur_drag_hint: "Déplacez la zone sur l'aperçu ; tirez son coin pour la redimensionner.",
@@ -507,6 +534,7 @@ export const MESSAGES: Record<Lang, Messages> = {
     toast_batch_applied: (count) => `Appliqué à ${count} projets.`,
     toast_speed_applied: (speed, count) => `Vitesse ${speed}× appliquée à ${count} projets.`,
     toast_aspect_applied: (aspect, count) => `Format ${aspect} appliqué à ${count} projets.`,
+    toast_smart_crop_applied: (count) => `Smart Crop appliqué à ${count} projets.`,
     toast_blur_applied: (count) => `Zone floutée appliquée à ${count} projets.`,
     toast_folder_unsupported: "Ce navigateur ne permet pas de choisir un dossier. Le téléchargement normal reste disponible.",
     toast_folder_selected: (name) => `Dossier ${name} sélectionné. Les vidéos y seront enregistrées automatiquement.`,
@@ -586,6 +614,12 @@ export const MESSAGES: Record<Lang, Messages> = {
     mute_label: "静音",
     mute_sub: "应用到所有片段",
     apply_all: "应用到所有项目",
+    smart_crop_title: "智能边缘裁剪",
+    smart_crop_subtitle: "轻微裁剪角落并填满画面，不产生黑边",
+    smart_crop_hint: "选择要移除的角落。建议从 4% 开始，仅在边缘区域仍可见时增加。",
+    smart_crop_corner_label: "要裁剪的角落",
+    smart_crop_amount: "双边裁剪比例",
+    smart_crop_apply_all: "将智能裁剪应用到所有项目",
     blur_title: "模糊固定区域",
     blur_subtitle: "仅用于您有权编辑的内容",
     blur_drag_hint: "在预览中拖动模糊区域；拖动角点可调整大小。",
@@ -634,6 +668,7 @@ export const MESSAGES: Record<Lang, Messages> = {
     toast_batch_applied: (count) => `已应用到 ${count} 个项目。`,
     toast_speed_applied: (speed, count) => `已将 ${speed}× 速度应用到 ${count} 个项目。`,
     toast_aspect_applied: (aspect, count) => `已将 ${aspect} 画幅应用到 ${count} 个项目。`,
+    toast_smart_crop_applied: (count) => `已将智能裁剪应用到 ${count} 个项目。`,
     toast_blur_applied: (count) => `已将模糊区域应用到 ${count} 个项目。`,
     toast_folder_unsupported: "此浏览器不支持选择保存文件夹，仍可使用普通下载。",
     toast_folder_selected: (name) => `已选择 ${name}，导出视频将自动保存到该文件夹。`,

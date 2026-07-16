@@ -21,6 +21,11 @@ export type EngineProject = {
     height: number;
     strength: number;
   };
+  smartCrop: {
+    enabled: boolean;
+    amount: number;
+    corner: "top-left" | "top-right" | "bottom-left" | "bottom-right";
+  };
 };
 
 type EngineProgress = (progress: number, message: string) => void;
@@ -63,6 +68,30 @@ function audioTempoFilter(speed: number) {
 
 function evenPixel(value: number) {
   return Math.max(2, Math.floor(value / 2) * 2);
+}
+
+function greatestCommonDivisor(first: number, second: number) {
+  let a = Math.abs(first);
+  let b = Math.abs(second);
+  while (b) [a, b] = [b, a % b];
+  return a || 1;
+}
+
+function smartCropFilter(project: EngineProject, width: number, height: number) {
+  if (!project.smartCrop.enabled) return "";
+  const amount = Math.min(0.08, Math.max(0.02, project.smartCrop.amount / 100));
+  const ratioUnit = greatestCommonDivisor(width, height);
+  const unitWidth = width / ratioUnit;
+  const unitHeight = height / ratioUnit;
+  let remainingUnits = Math.max(2, Math.floor(ratioUnit * (1 - amount)));
+  while ((unitWidth * remainingUnits) % 2 || (unitHeight * remainingUnits) % 2) remainingUnits -= 1;
+  const cropWidth = unitWidth * remainingUnits;
+  const cropHeight = unitHeight * remainingUnits;
+  const removesLeft = project.smartCrop.corner.endsWith("left");
+  const removesTop = project.smartCrop.corner.startsWith("top");
+  const cropX = removesLeft ? width - cropWidth : 0;
+  const cropY = removesTop ? height - cropHeight : 0;
+  return `crop=${cropWidth}:${cropHeight}:${cropX}:${cropY},scale=${width}:${height}`;
 }
 
 function blurFilterGraph(project: EngineProject, width: number, height: number, baseFilter: string) {
@@ -189,12 +218,15 @@ class BrowserVideoEngine {
         const hasAudio = !project.muted && await this.inputHasAudio(ffmpeg, inputName);
 
         const duration = Math.max(0.05, clip.trimEnd - clip.trimStart);
-        const baseVideoFilter = [
+        const baseVideoFilterParts = [
           `setpts=PTS/${clip.speed}`,
           `scale=${width}:${height}:force_original_aspect_ratio=increase`,
           `crop=${width}:${height}:(iw-ow)/2:(ih-oh)/2`,
-          "setsar=1",
-        ].join(",");
+        ];
+        const cropFilter = smartCropFilter(project, width, height);
+        if (cropFilter) baseVideoFilterParts.push(cropFilter);
+        baseVideoFilterParts.push("setsar=1");
+        const baseVideoFilter = baseVideoFilterParts.join(",");
 
         const args = [
           "-ss", clip.trimStart.toFixed(3),

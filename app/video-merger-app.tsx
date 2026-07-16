@@ -2,6 +2,7 @@
 
 import { ChangeEvent, DragEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { videoEngine, type EngineProject } from "./lib/video-engine";
+import { MESSAGES, normalizeLang, translateStatus, type Lang } from "./lib/i18n";
 
 type ProjectStatus = "idle" | "queued" | "processing" | "done" | "error";
 
@@ -137,13 +138,14 @@ function videoMetadata(file: File): Promise<Omit<Clip, "id" | "file" | "name" | 
   });
 }
 
-function StatusPill({ status }: { status: ProjectStatus }) {
+function StatusPill({ status, lang }: { status: ProjectStatus; lang: Lang }) {
+  const t = MESSAGES[lang];
   const labels: Record<ProjectStatus, string> = {
-    idle: "Sẵn sàng",
-    queued: "Đang chờ",
-    processing: "Đang xuất",
-    done: "Hoàn tất",
-    error: "Có lỗi",
+    idle: t.status_idle,
+    queued: t.status_queued,
+    processing: t.status_processing,
+    done: t.status_done,
+    error: t.status_error,
   };
   return <span className={`status-pill status-${status}`}><i />{labels[status]}</span>;
 }
@@ -159,6 +161,7 @@ export function VideoMergerApp() {
   const [batchAspect, setBatchAspect] = useState<Project["aspect"]>("9:16");
   const [batchMuted, setBatchMuted] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  const [uiLang, setUiLang] = useState<Lang>("vi");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const previewVideoRef = useRef<HTMLVideoElement>(null);
   const projectsRef = useRef(projects);
@@ -168,6 +171,28 @@ export function VideoMergerApp() {
   useEffect(() => {
     projectsRef.current = projects;
   }, [projects]);
+
+  // Bảng chuỗi theo ngôn ngữ hiện tại. tRef để các useCallback dùng bản mới
+  // nhất mà không phải thêm dependency.
+  const t = MESSAGES[uiLang];
+  const tRef = useRef(t);
+  tRef.current = t;
+
+  // Đồng bộ ngôn ngữ: nhớ lựa chọn cũ trong localStorage, và nhận lệnh
+  // SET_LANG do extension AutoFlow gửi vào iframe khi người dùng đổi ngôn ngữ.
+  useEffect(() => {
+    const saved = normalizeLang(window.localStorage.getItem("cutflow-lang"));
+    if (saved) setUiLang(saved);
+    const onLangMessage = (event: MessageEvent) => {
+      if (event.data?.type !== "SET_LANG" || event.data?.source !== "CUTFLOW_EXTENSION") return;
+      const next = normalizeLang(event.data.lang);
+      if (!next) return;
+      setUiLang(next);
+      try { window.localStorage.setItem("cutflow-lang", next); } catch { /* private mode */ }
+    };
+    window.addEventListener("message", onLangMessage);
+    return () => window.removeEventListener("message", onLangMessage);
+  }, []);
 
   useEffect(() => () => {
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
@@ -206,19 +231,19 @@ export function VideoMergerApp() {
   const ingestFiles = useCallback(async (files: File[], projectId = activeProjectId) => {
     const videoFiles = files.filter((file) => file.type.startsWith("video/") || /\.(mp4|mov|mkv|webm|m4v|avi)$/i.test(file.name));
     if (!videoFiles.length) {
-      showToast("Hãy chọn tệp video hợp lệ.");
+      showToast(tRef.current.toast_invalid_files);
       return;
     }
     const target = projectsRef.current.find((project) => project.id === projectId);
     if (!target) return;
     const remaining = Math.max(0, MAX_CLIPS - target.clips.length);
     if (!remaining) {
-      showToast(`Mỗi dự án hỗ trợ tối đa ${MAX_CLIPS} clip.`);
+      showToast(tRef.current.toast_max_clips(MAX_CLIPS));
       return;
     }
 
     const accepted = videoFiles.slice(0, remaining);
-    showToast(`Đang đọc ${accepted.length} video…`);
+    showToast(tRef.current.toast_reading(accepted.length));
     const settled = await Promise.allSettled(accepted.map(async (file) => {
       const metadata = await videoMetadata(file);
       return {
@@ -234,7 +259,7 @@ export function VideoMergerApp() {
     }));
     const clips = settled.flatMap((result) => result.status === "fulfilled" ? [result.value] : []);
     if (!clips.length) {
-      showToast("Không thể đọc các video đã chọn.");
+      showToast(tRef.current.toast_read_failed);
       return;
     }
     updateProject(projectId, (project) => ({
@@ -246,7 +271,7 @@ export function VideoMergerApp() {
       error: undefined,
     }));
     setSelectedClipId(clips[0].id);
-    showToast(`Đã thêm ${clips.length} video vào dự án.`);
+    showToast(tRef.current.toast_added(clips.length));
   }, [activeProjectId, showToast, updateProject]);
 
   useEffect(() => {
@@ -255,10 +280,10 @@ export function VideoMergerApp() {
       if (event.data.type === "CREATE_PROJECT") {
         if (projectsRef.current.length >= MAX_PROJECTS) {
           window.postMessage({ source: "CUTFLOW_WEB", type: "PROJECT_REJECTED", reason: "MAX_PROJECTS" }, window.location.origin);
-          showToast(`Bạn có thể mở tối đa ${MAX_PROJECTS} dự án cùng lúc.`);
+          showToast(tRef.current.toast_max_projects(MAX_PROJECTS));
           return;
         }
-        const project = emptyProject(newId("project"), projectsRef.current.length + 1, event.data.name || "Dự án từ Extension");
+        const project = emptyProject(newId("project"), projectsRef.current.length + 1, event.data.name || tRef.current.extension_project_name);
         const nextProjects = [...projectsRef.current, project];
         projectsRef.current = nextProjects;
         setProjects(nextProjects);
@@ -274,10 +299,10 @@ export function VideoMergerApp() {
 
   const addProject = () => {
     if (projects.length >= MAX_PROJECTS) {
-      showToast(`Bạn có thể mở tối đa ${MAX_PROJECTS} dự án cùng lúc.`);
+      showToast(t.toast_max_projects(MAX_PROJECTS));
       return;
     }
-    const project = emptyProject(newId("project"), projects.length + 1);
+    const project = emptyProject(newId("project"), projects.length + 1, t.default_project_name(String(projects.length + 1).padStart(2, "0")));
     setProjects((current) => [...current, project]);
     setActiveProjectId(project.id);
     setSelectedClipId(null);
@@ -285,7 +310,7 @@ export function VideoMergerApp() {
 
   const removeProject = (projectId: string) => {
     if (projects.length === 1) {
-      showToast("Cần giữ lại ít nhất một dự án.");
+      showToast(t.toast_keep_one_project);
       return;
     }
     const removed = projects.find((project) => project.id === projectId);
@@ -338,7 +363,7 @@ export function VideoMergerApp() {
       projectsRef.current = next;
       return next;
     });
-    showToast(`Đã áp dụng cho ${projectCountWithClips || projects.length} dự án.`);
+    showToast(t.toast_batch_applied(projectCountWithClips || projects.length));
   };
 
   const applyBatchSpeed = (speed: number) => {
@@ -354,7 +379,7 @@ export function VideoMergerApp() {
       projectsRef.current = next;
       return next;
     });
-    showToast(`Đã áp dụng tốc độ ${speed}× cho ${projectCountWithClips || projects.length} dự án.`);
+    showToast(t.toast_speed_applied(String(speed), projectCountWithClips || projects.length));
   };
 
   const applyBatchAspect = (aspect: Project["aspect"]) => {
@@ -370,7 +395,7 @@ export function VideoMergerApp() {
       projectsRef.current = next;
       return next;
     });
-    showToast(`Đã áp dụng khung hình ${aspect} cho ${projectCountWithClips || projects.length} dự án.`);
+    showToast(t.toast_aspect_applied(aspect, projectCountWithClips || projects.length));
   };
 
   const notifyExtension = (project: Project) => {
@@ -414,14 +439,14 @@ export function VideoMergerApp() {
     } catch (error) {
       const message = readableError(error);
       updateProject(projectId, (current) => ({ ...current, status: "error", statusText: "Xử lý thất bại", error: message }));
-      showToast(message.includes("fetch") ? "Không tải được bộ xử lý FFmpeg. Hãy kiểm tra kết nối mạng." : message);
+      showToast(message.includes("fetch") ? tRef.current.toast_ffmpeg_network : message);
       return false;
     }
   }, [showToast, updateProject]);
 
   const exportActive = async () => {
     if (!activeProject.clips.length) {
-      showToast("Hãy nạp ít nhất một video trước khi xuất.");
+      showToast(t.toast_no_clips_active);
       return;
     }
     cancelledRef.current = false;
@@ -433,7 +458,7 @@ export function VideoMergerApp() {
   const exportAll = async () => {
     const ids = projectsRef.current.filter((project) => project.clips.length > 0).map((project) => project.id);
     if (!ids.length) {
-      showToast("Chưa có dự án nào chứa video.");
+      showToast(t.toast_no_projects);
       return;
     }
     cancelledRef.current = false;
@@ -450,8 +475,8 @@ export function VideoMergerApp() {
     setIsBatching(false);
     if (!cancelledRef.current) {
       showToast(failedCount
-        ? `Hoàn tất: ${completedCount} thành công, ${failedCount} thất bại.`
-        : `Đã xử lý thành công ${completedCount} dự án.`);
+        ? t.toast_batch_done_failed(completedCount, failedCount)
+        : t.toast_batch_done(completedCount));
     }
   };
 
@@ -462,7 +487,7 @@ export function VideoMergerApp() {
     setProjects((current) => current.map((project) => project.status === "processing" || project.status === "queued"
       ? { ...project, status: "idle", progress: 0, statusText: "Đã dừng" }
       : project));
-    showToast("Đã dừng hàng đợi xuất.");
+    showToast(t.toast_stopped);
   };
 
   const onFilesSelected = (event: ChangeEvent<HTMLInputElement>) => {
@@ -494,11 +519,11 @@ export function VideoMergerApp() {
         </div>
         <div className="topbar-center">
           <span className="privacy-dot" />
-          Video được xử lý trong trình duyệt của bạn
+          {t.privacy_note}
         </div>
         <div className="topbar-actions">
           <span className="extension-chip"><i>↗</i> Extension ready</span>
-          <button className="icon-button" type="button" aria-label="Trợ giúp" title="Kéo video vào dự án, chỉnh thông số rồi xuất">?</button>
+          <button className="icon-button" type="button" aria-label={t.help_label} title={t.help_tooltip}>?</button>
         </div>
       </header>
 
@@ -506,10 +531,10 @@ export function VideoMergerApp() {
         <aside className="project-sidebar">
           <div className="sidebar-heading">
             <div>
-              <span>DỰ ÁN</span>
+              <span>{t.projects_heading}</span>
               <small>{projects.length}/{MAX_PROJECTS}</small>
             </div>
-            <button type="button" onClick={addProject} aria-label="Thêm dự án">＋</button>
+            <button type="button" onClick={addProject} aria-label={t.add_project}>＋</button>
           </div>
 
           <div className="project-list">
@@ -523,38 +548,38 @@ export function VideoMergerApp() {
                 <span className="project-number">{String(index + 1).padStart(2, "0")}</span>
                 <span className="project-copy">
                   <strong>{project.name}</strong>
-                  <small>{project.clips.length} clip · {formatTime(totalDuration(project))}</small>
+                  <small>{project.clips.length} {t.clip_word} · {formatTime(totalDuration(project))}</small>
                   {project.status === "processing" || project.status === "queued" ? (
                     <span className="mini-progress"><i style={{ width: `${project.progress}%` }} /></span>
                   ) : null}
                 </span>
-                <StatusPill status={project.status} />
+                <StatusPill status={project.status} lang={uiLang} />
               </button>
             ))}
           </div>
 
           <div className="sidebar-foot">
-            <span><i className="storage-icon" />Phiên làm việc hiện tại</span>
-            <small>{formatBytes(queueSummary.totalSize)} · {queueSummary.totalClips} clip</small>
+            <span><i className="storage-icon" />{t.current_session}</span>
+            <small>{formatBytes(queueSummary.totalSize)} · {queueSummary.totalClips} {t.clip_word}</small>
           </div>
         </aside>
 
         <section className="workspace">
           <div className="workspace-head">
             <div>
-              <label htmlFor="project-name">TÊN DỰ ÁN</label>
+              <label htmlFor="project-name">{t.project_name_label}</label>
               <input
                 id="project-name"
                 value={activeProject.name}
                 onChange={(event) => updateProject(activeProject.id, (project) => ({ ...project, name: event.target.value }))}
-                aria-label="Tên dự án"
+                aria-label={t.project_name_label}
               />
             </div>
             <div className="workspace-meta">
-              <span>{activeProject.clips.length} clip</span>
+              <span>{activeProject.clips.length} {t.clip_word}</span>
               <i />
               <span>{formatTime(totalDuration(activeProject))}</span>
-              <button type="button" className="more-button" onClick={() => removeProject(activeProject.id)} aria-label="Xóa dự án">Xóa dự án</button>
+              <button type="button" className="more-button" onClick={() => removeProject(activeProject.id)} aria-label={t.delete_project}>{t.delete_project}</button>
             </div>
           </div>
 
@@ -570,7 +595,7 @@ export function VideoMergerApp() {
                   preload="metadata"
                   onLoadedMetadata={(event) => { event.currentTarget.playbackRate = selectedClip.speed; }}
                 />
-                <span className="preview-badge">XEM TRƯỚC · {activeProject.aspect} · {selectedClip.speed}×</span>
+                <span className="preview-badge">{t.preview_badge} · {activeProject.aspect} · {selectedClip.speed}×</span>
               </div>
             ) : (
               <div
@@ -580,10 +605,10 @@ export function VideoMergerApp() {
                 onDrop={onDrop}
               >
                 <div className="drop-icon"><i>＋</i></div>
-                <h1>Thả video để bắt đầu</h1>
-                <p>Nạp nhiều clip, cắt đoạn cần dùng rồi sắp xếp để nối thành một video.</p>
-                <button type="button" className="primary-button" onClick={() => fileInputRef.current?.click()}>Chọn video</button>
-                <small>MP4, MOV, WebM, MKV · tối đa {MAX_CLIPS} clip/dự án</small>
+                <h1>{t.drop_title}</h1>
+                <p>{t.drop_desc}</p>
+                <button type="button" className="primary-button" onClick={() => fileInputRef.current?.click()}>{t.choose_videos}</button>
+                <small>{t.drop_hint(MAX_CLIPS)}</small>
               </div>
             )}
 
@@ -591,10 +616,10 @@ export function VideoMergerApp() {
               <div className="clip-editor">
                 <div className="editor-label">
                   <span>✂</span>
-                  <div><b>Cắt clip đang chọn</b><small>{selectedClip.name}</small></div>
+                  <div><b>{t.trim_title}</b><small>{selectedClip.name}</small></div>
                 </div>
                 <label>
-                  Bắt đầu
+                  {t.trim_start}
                   <div className="input-with-unit">
                     <input
                       type="number"
@@ -604,11 +629,11 @@ export function VideoMergerApp() {
                       value={Number(selectedClip.trimStart.toFixed(2))}
                       onChange={(event) => updateClip(selectedClip.id, { trimStart: Math.min(Number(event.target.value), selectedClip.trimEnd - 0.05) })}
                     />
-                    <span>giây</span>
+                    <span>{t.seconds_unit}</span>
                   </div>
                 </label>
                 <label>
-                  Kết thúc
+                  {t.trim_end}
                   <div className="input-with-unit">
                     <input
                       type="number"
@@ -618,17 +643,17 @@ export function VideoMergerApp() {
                       value={Number(selectedClip.trimEnd.toFixed(2))}
                       onChange={(event) => updateClip(selectedClip.id, { trimEnd: Math.max(selectedClip.trimStart + 0.05, Math.min(Number(event.target.value), selectedClip.duration)) })}
                     />
-                    <span>giây</span>
+                    <span>{t.seconds_unit}</span>
                   </div>
                 </label>
                 <label>
-                  Tốc độ
+                  {t.speed_label}
                   <select value={selectedClip.speed} onChange={(event) => updateClip(selectedClip.id, { speed: Number(event.target.value) })}>
                     {SPEEDS.map((speed) => <option key={speed} value={speed}>{speed}×</option>)}
                   </select>
                 </label>
                 <div className="trim-result">
-                  <span>Thành phẩm</span>
+                  <span>{t.trim_result}</span>
                   <strong>{formatTime((selectedClip.trimEnd - selectedClip.trimStart) / selectedClip.speed)}</strong>
                 </div>
               </div>
@@ -637,8 +662,8 @@ export function VideoMergerApp() {
 
           <div className="timeline-panel">
             <div className="timeline-head">
-              <div><span>TIMELINE</span><small>Kéo thả hoặc dùng mũi tên để sắp xếp</small></div>
-              <button type="button" onClick={() => fileInputRef.current?.click()}>＋ Thêm clip</button>
+              <div><span>TIMELINE</span><small>{t.timeline_hint}</small></div>
+              <button type="button" onClick={() => fileInputRef.current?.click()}>＋ {t.add_clip}</button>
             </div>
             <div
               className={`clip-strip ${isDragging ? "dragging" : ""}`}
@@ -657,14 +682,14 @@ export function VideoMergerApp() {
                     <small>{clip.speed}× · {formatBytes(clip.size)}</small>
                   </div>
                   <div className="clip-actions">
-                    <button type="button" onClick={(event) => { event.stopPropagation(); moveClip(clip.id, -1); }} disabled={index === 0} aria-label="Đưa clip sang trái">‹</button>
-                    <button type="button" onClick={(event) => { event.stopPropagation(); moveClip(clip.id, 1); }} disabled={index === activeProject.clips.length - 1} aria-label="Đưa clip sang phải">›</button>
-                    <button type="button" className="remove-clip" onClick={(event) => { event.stopPropagation(); removeClip(clip.id); }} aria-label="Xóa clip">×</button>
+                    <button type="button" onClick={(event) => { event.stopPropagation(); moveClip(clip.id, -1); }} disabled={index === 0} aria-label={t.move_left}>‹</button>
+                    <button type="button" onClick={(event) => { event.stopPropagation(); moveClip(clip.id, 1); }} disabled={index === activeProject.clips.length - 1} aria-label={t.move_right}>›</button>
+                    <button type="button" className="remove-clip" onClick={(event) => { event.stopPropagation(); removeClip(clip.id); }} aria-label={t.remove_clip}>×</button>
                   </div>
                 </article>
               ))}
               <button type="button" className="add-clip-card" onClick={() => fileInputRef.current?.click()}>
-                <i>＋</i><span>Thêm clip</span>
+                <i>＋</i><span>{t.add_clip}</span>
               </button>
             </div>
           </div>
@@ -672,17 +697,17 @@ export function VideoMergerApp() {
 
         <aside className="export-panel">
           <div className="panel-title">
-            <div><span>THIẾT LẬP HÀNG LOẠT</span><small>Áp dụng cho mọi dự án</small></div>
+            <div><span>{t.batch_heading}</span><small>{t.batch_sub}</small></div>
             <span className="batch-badge">BATCH</span>
           </div>
 
           <div className="setting-group">
-            <label htmlFor="batch-speed">Tốc độ chung</label>
+            <label htmlFor="batch-speed">{t.batch_speed_label}</label>
             <div className="speed-control">
               <select id="batch-speed" value={batchSpeed} onChange={(event) => applyBatchSpeed(Number(event.target.value))}>
                 {SPEEDS.map((speed) => <option key={speed} value={speed}>{speed}×</option>)}
               </select>
-              <span>{batchSpeed === 1 ? "GỐC" : batchSpeed < 1 ? "CHẬM" : "NHANH"}</span>
+              <span>{batchSpeed === 1 ? t.speed_original : batchSpeed < 1 ? t.speed_slow : t.speed_fast}</span>
             </div>
             <div className="speed-presets">
               {SPEED_PRESETS.map((speed) => (
@@ -693,35 +718,35 @@ export function VideoMergerApp() {
 
           <div className="setting-row">
             <label>
-              Tỉ lệ khung hình
+              {t.aspect_label}
               <select value={batchAspect} onChange={(event) => applyBatchAspect(event.target.value as Project["aspect"])}>
-                <option value="9:16">9:16 — Dọc (mặc định)</option>
-                <option value="16:9">16:9 — Ngang</option>
-                <option value="1:1">1:1 — Vuông</option>
+                <option value="9:16">{t.aspect_916}</option>
+                <option value="16:9">{t.aspect_169}</option>
+                <option value="1:1">{t.aspect_11}</option>
               </select>
             </label>
             <label>
-              Chất lượng
+              {t.quality_label}
               <select value={batchQuality} onChange={(event) => setBatchQuality(event.target.value as Project["quality"])}>
-                <option value="720p">720p — Nhanh</option>
-                <option value="1080p">1080p — Đẹp</option>
+                <option value="720p">{t.quality_720}</option>
+                <option value="1080p">{t.quality_1080}</option>
               </select>
             </label>
           </div>
 
           <label className="toggle-row">
-            <span><b>Tắt âm thanh</b><small>Áp dụng cho toàn bộ clip</small></span>
+            <span><b>{t.mute_label}</b><small>{t.mute_sub}</small></span>
             <input type="checkbox" checked={batchMuted} onChange={(event) => setBatchMuted(event.target.checked)} />
             <i />
           </label>
 
-          <button type="button" className="apply-button" onClick={applyBatchSettings}>Áp dụng cho tất cả dự án</button>
+          <button type="button" className="apply-button" onClick={applyBatchSettings}>{t.apply_all}</button>
 
           <div className="queue-box">
-            <div className="queue-heading"><span>HÀNG ĐỢI XUẤT</span><small>{projectCountWithClips} dự án</small></div>
+            <div className="queue-heading"><span>{t.queue_heading}</span><small>{projectCountWithClips} {t.projects_word}</small></div>
             <div className="queue-stats">
-              <div><small>TỔNG THỜI LƯỢNG</small><strong>{formatTime(totalQueueDuration)}</strong></div>
-              <div><small>DUNG LƯỢNG GỐC</small><strong>{formatBytes(queueSummary.totalSize)}</strong></div>
+              <div><small>{t.total_duration}</small><strong>{formatTime(totalQueueDuration)}</strong></div>
+              <div><small>{t.total_size}</small><strong>{formatBytes(queueSummary.totalSize)}</strong></div>
             </div>
             <div className="queue-items">
               {projects.filter((project) => project.clips.length > 0).map((project) => (
@@ -730,13 +755,13 @@ export function VideoMergerApp() {
                   <small>{project.status === "processing" ? `${project.progress}%` : formatTime(totalDuration(project))}</small>
                 </div>
               ))}
-              {!projectCountWithClips ? <p>Nạp video vào dự án để tạo hàng đợi.</p> : null}
+              {!projectCountWithClips ? <p>{t.queue_empty}</p> : null}
             </div>
           </div>
 
           {activeProject.status === "processing" ? (
             <div className="active-progress">
-              <div><span>{activeProject.statusText}</span><b>{activeProject.progress}%</b></div>
+              <div><span>{translateStatus(activeProject.statusText, uiLang)}</span><b>{activeProject.progress}%</b></div>
               <span><i style={{ width: `${activeProject.progress}%` }} /></span>
             </div>
           ) : null}
@@ -744,23 +769,23 @@ export function VideoMergerApp() {
           {activeProject.status === "error" ? <p className="error-message">{activeProject.error}</p> : null}
 
           {activeProject.outputUrl ? (
-            <a className="download-button" href={activeProject.outputUrl} download={activeOutputName}>↓ Tải {activeProject.name}</a>
+            <a className="download-button" href={activeProject.outputUrl} download={activeOutputName}>↓ {t.download_prefix} {activeProject.name}</a>
           ) : null}
 
           <div className="export-actions">
             {isBatching ? (
-              <button type="button" className="stop-button" onClick={stopExport}>Dừng xử lý</button>
+              <button type="button" className="stop-button" onClick={stopExport}>{t.stop_processing}</button>
             ) : (
               <>
-                <button type="button" className="secondary-button" onClick={exportActive} disabled={!activeProject.clips.length}>Xuất dự án này</button>
+                <button type="button" className="secondary-button" onClick={exportActive} disabled={!activeProject.clips.length}>{t.export_active}</button>
                 <button type="button" className="export-button" onClick={exportAll} disabled={!projectCountWithClips}>
                   <span>▶</span>
-                  <div><b>Xuất tất cả</b><small>{projectCountWithClips} dự án · xử lý tuần tự</small></div>
+                  <div><b>{t.export_all}</b><small>{t.export_all_sub(projectCountWithClips)}</small></div>
                 </button>
               </>
             )}
           </div>
-          <p className="export-note"><i>✓</i> Video không được tải lên máy chủ</p>
+          <p className="export-note"><i>✓</i> {t.export_note}</p>
         </aside>
       </div>
 

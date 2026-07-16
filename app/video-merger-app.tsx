@@ -30,14 +30,6 @@ type BlurRegion = {
   strength: number;
 };
 
-type SmartCropCorner = "top-left" | "top-right" | "bottom-left" | "bottom-right";
-
-type SmartCrop = {
-  enabled: boolean;
-  amount: number;
-  corner: SmartCropCorner;
-};
-
 type Project = {
   id: string;
   name: string;
@@ -47,7 +39,6 @@ type Project = {
   aspect: "16:9" | "9:16" | "1:1";
   muted: boolean;
   blur: BlurRegion;
-  smartCrop: SmartCrop;
   status: ProjectStatus;
   progress: number;
   statusText: string;
@@ -83,7 +74,6 @@ const SPEED_PRESETS = [1, 1.1, 1.2, 1.3];
 const MAX_PROJECTS = 5;
 const MAX_CLIPS = 12;
 const DEFAULT_BLUR: BlurRegion = { enabled: false, x: 78, y: 86, width: 18, height: 9, strength: 24 };
-const DEFAULT_SMART_CROP: SmartCrop = { enabled: false, amount: 4, corner: "bottom-right" };
 const HANDLE_DB_NAME = "cutflow-file-handles";
 const HANDLE_STORE_NAME = "handles";
 const EXPORT_DIRECTORY_KEY = "export-directory";
@@ -218,7 +208,6 @@ function emptyProject(id = newId("project"), index = 1, name?: string): Project 
     aspect: "9:16",
     muted: false,
     blur: { ...DEFAULT_BLUR },
-    smartCrop: { ...DEFAULT_SMART_CROP },
     status: "idle",
     progress: 0,
     statusText: "Sẵn sàng",
@@ -512,43 +501,11 @@ export function VideoMergerApp() {
     updateProject(activeProject.id, (project) => ({
       ...project,
       blur: normalizeBlurRegion({ ...project.blur, ...update }),
-      smartCrop: update.enabled ? { ...project.smartCrop, enabled: false } : project.smartCrop,
       status: "idle",
       progress: 0,
       statusText: "Đã thay đổi",
     }));
   }, [activeProject.id, updateProject]);
-
-  const updateSmartCrop = useCallback((update: Partial<SmartCrop>) => {
-    updateProject(activeProject.id, (project) => ({
-      ...project,
-      smartCrop: {
-        ...project.smartCrop,
-        ...update,
-        amount: clamp(update.amount ?? project.smartCrop.amount, 2, 8),
-      },
-      blur: update.enabled ? { ...project.blur, enabled: false } : project.blur,
-      status: "idle",
-      progress: 0,
-      statusText: "Đã thay đổi",
-    }));
-  }, [activeProject.id, updateProject]);
-
-  const applySmartCropToAll = () => {
-    setProjects((current) => {
-      const next = current.map((project) => ({
-        ...project,
-        smartCrop: { ...activeProject.smartCrop },
-        blur: activeProject.smartCrop.enabled ? { ...project.blur, enabled: false } : project.blur,
-        status: project.clips.length ? "idle" as const : project.status,
-        progress: project.clips.length ? 0 : project.progress,
-        statusText: project.clips.length ? "Đã thay đổi" : project.statusText,
-      }));
-      projectsRef.current = next;
-      return next;
-    });
-    showToast(t.toast_smart_crop_applied(projectCountWithClips || projects.length));
-  };
 
   const setBlurCorner = (horizontal: "left" | "right", vertical: "top" | "bottom") => {
     const { width, height } = activeProject.blur;
@@ -816,7 +773,6 @@ export function VideoMergerApp() {
         aspect: project.aspect,
         muted: project.muted,
         blur: project.blur,
-        smartCrop: project.smartCrop,
         clips: project.clips.map((clip) => ({
           id: clip.id,
           file: clip.file,
@@ -935,13 +891,6 @@ export function VideoMergerApp() {
 
   const activeOutputName = projectOutputFileName(activeProject);
   const activeAspectClass = `ratio-${activeProject.aspect.replace(":", "x")}`;
-  const smartCropScale = activeProject.smartCrop.enabled ? 1 / (1 - activeProject.smartCrop.amount / 100) : 1;
-  const smartCropOrigins: Record<SmartCropCorner, string> = {
-    "top-left": "bottom right",
-    "top-right": "bottom left",
-    "bottom-left": "top right",
-    "bottom-right": "top left",
-  };
 
   const queueSummary = useMemo(() => {
     const totalSize = projects.reduce((sum, project) => sum + project.clips.reduce((clipSum, clip) => clipSum + clip.size, 0), 0);
@@ -1032,11 +981,6 @@ export function VideoMergerApp() {
                   controls
                   playsInline
                   preload="metadata"
-                  className={activeProject.smartCrop.enabled ? "smart-crop-preview" : undefined}
-                  style={activeProject.smartCrop.enabled ? {
-                    transform: `scale(${smartCropScale})`,
-                    transformOrigin: smartCropOrigins[activeProject.smartCrop.corner],
-                  } : undefined}
                   onLoadedMetadata={(event) => { event.currentTarget.playbackRate = selectedClip.speed; }}
                 />
                 {activeProject.blur.enabled ? (
@@ -1058,9 +1002,6 @@ export function VideoMergerApp() {
                     <span>{t.blur_region_label}</span>
                     <i onPointerDown={(event) => startBlurDrag(event, "resize")} />
                   </div>
-                ) : null}
-                {activeProject.smartCrop.enabled ? (
-                  <span className="smart-crop-badge">SMART CROP · {activeProject.smartCrop.amount}%</span>
                 ) : null}
                 <span className="preview-badge">{t.preview_badge} · {activeProject.aspect} · {selectedClip.speed}×</span>
               </div>
@@ -1208,52 +1149,6 @@ export function VideoMergerApp() {
           </label>
 
           <button type="button" className="apply-button" onClick={applyBatchSettings}>{t.apply_all}</button>
-
-          <div className="smart-crop-settings">
-            <label className="toggle-row smart-crop-toggle">
-              <span><b>{t.smart_crop_title}</b><small>{t.smart_crop_subtitle}</small></span>
-              <input
-                type="checkbox"
-                checked={activeProject.smartCrop.enabled}
-                onChange={(event) => updateSmartCrop({ enabled: event.target.checked })}
-              />
-              <i />
-            </label>
-            {activeProject.smartCrop.enabled ? (
-              <div className="smart-crop-controls">
-                <small>{t.smart_crop_hint}</small>
-                <div className="smart-crop-corners" aria-label={t.smart_crop_corner_label}>
-                  {([
-                    ["top-left", "↖", t.blur_top_left],
-                    ["top-right", "↗", t.blur_top_right],
-                    ["bottom-left", "↙", t.blur_bottom_left],
-                    ["bottom-right", "↘", t.blur_bottom_right],
-                  ] as const).map(([corner, icon, label]) => (
-                    <button
-                      type="button"
-                      key={corner}
-                      className={activeProject.smartCrop.corner === corner ? "active" : ""}
-                      onClick={() => updateSmartCrop({ corner })}
-                      aria-label={label}
-                      title={label}
-                    >{icon}</button>
-                  ))}
-                </div>
-                <label>
-                  <span>{t.smart_crop_amount}<b>{activeProject.smartCrop.amount}%</b></span>
-                  <input
-                    type="range"
-                    min="2"
-                    max="8"
-                    step="0.5"
-                    value={activeProject.smartCrop.amount}
-                    onChange={(event) => updateSmartCrop({ amount: Number(event.target.value) })}
-                  />
-                </label>
-                <button type="button" className="smart-crop-apply-all" onClick={applySmartCropToAll}>{t.smart_crop_apply_all}</button>
-              </div>
-            ) : null}
-          </div>
 
           <div className="blur-settings">
             <label className="toggle-row blur-toggle">

@@ -179,6 +179,17 @@ button:disabled { cursor: not-allowed; opacity: .42; }
 .toggle-row input:checked + i { background: var(--purple); }
 .toggle-row input:checked + i::after { transform: translateX(15px); background: white; }
 .apply-button { width: 100%; background: rgba(130,87,255,.13); border: 1px solid rgba(130,87,255,.38); color: #c8b9ff; margin-bottom: 16px; }
+.save-settings { margin: 0 0 14px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: #0d0d12; display: grid; gap: 8px; }
+.output-name-label { display: flex; flex-direction: column; gap: 6px; color: var(--muted); font-size: 8px; }
+.output-name-input { position: relative; }
+.output-name-input input { width: 100%; height: 36px; padding: 0 48px 0 10px; border: 1px solid var(--line); border-radius: 7px; outline: none; background: #09090d; color: var(--text); font-size: 10px; }
+.output-name-input input:focus { border-color: var(--purple); box-shadow: 0 0 0 2px rgba(130,87,255,.12); }
+.output-name-input i { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); color: #777681; font-style: normal; font-size: 9px; pointer-events: none; }
+.folder-button { min-height: 36px; padding: 0 11px; border: 1px solid rgba(186,242,99,.24); border-radius: 7px; background: rgba(186,242,99,.07); color: var(--lime); display: flex; align-items: center; justify-content: center; gap: 7px; font-size: 9px; font-weight: 700; }
+.folder-button:hover:not(:disabled) { background: rgba(186,242,99,.12); border-color: rgba(186,242,99,.42); }
+.folder-button span { font-size: 15px; line-height: 1; }
+.folder-state { color: #74737d; font-size: 8px; line-height: 1.4; overflow-wrap: anywhere; }
+.folder-state.selected { color: #9fcf5d; }
 .queue-box { border: 1px solid var(--line); border-radius: 10px; background: #0d0d12; overflow: hidden; }
 .queue-heading { display: flex; justify-content: space-between; padding: 11px 12px; border-bottom: 1px solid var(--line-soft); }
 .queue-heading small { font-size: 8px; color: var(--purple-bright); }
@@ -210,6 +221,7 @@ button:disabled { cursor: not-allowed; opacity: .42; }
 .export-button b { font-size: 12px; }
 .export-button small { font-size: 8px; color: #4e5c34; font-weight: 600; }
 .download-button { min-height: 42px; margin-top: 12px; font-size: 10px; }
+.saved-file { margin: 11px 0 0; padding: 8px 10px; border: 1px solid rgba(186,242,99,.2); border-radius: 7px; background: rgba(186,242,99,.06); color: #aedd65; font-size: 8px; overflow-wrap: anywhere; }
 .stop-button { background: rgba(255,109,117,.11); color: #ff9da2; border: 1px solid rgba(255,109,117,.3); }
 .export-note { color: #6f6e78; text-align: center; font-size: 8px; margin: 9px 0 0; }
 .export-note i { color: var(--lime); font-style: normal; margin-right: 4px; }
@@ -232,7 +244,7 @@ button:disabled { cursor: not-allowed; opacity: .42; }
   .topbar-center { display: none; }
   .studio-grid { grid-template-columns: 190px 1fr; }
   .export-panel { grid-column: 1 / -1; border-left: 0; border-top: 1px solid var(--line-soft); display: grid; grid-template-columns: 1fr 1fr; gap: 0 18px; }
-  .panel-title, .queue-box, .export-actions, .export-note, .active-progress, .error-message, .download-button { grid-column: span 1; }
+  .panel-title, .save-settings, .queue-box, .export-actions, .export-note, .active-progress, .error-message, .download-button, .saved-file { grid-column: span 1; }
 }
 
 @media (max-width: 680px) {

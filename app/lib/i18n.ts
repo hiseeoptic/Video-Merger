@@ -35,6 +35,7 @@ type Messages = {
   status_stopped: string;
   status_loading_engine: string;
   status_joining: string;
+  status_saved: (name: string) => string;
   status_speed_set: (speed: string) => string;
   status_aspect_set: (aspect: string) => string;
   status_processing_clip: (current: string, total: string) => string;
@@ -74,12 +75,21 @@ type Messages = {
   mute_label: string;
   mute_sub: string;
   apply_all: string;
+  output_filename_label: string;
+  output_filename_placeholder: string;
+  choose_folder: string;
+  change_folder: string;
+  folder_default: string;
+  folder_selected: (name: string) => string;
+  folder_unsupported: string;
+  saved_file: (name: string) => string;
   queue_heading: string;
   projects_word: string;
   total_duration: string;
   total_size: string;
   queue_empty: string;
   download_prefix: string;
+  download_again: string;
   stop_processing: string;
   export_active: string;
   export_all: string;
@@ -96,6 +106,11 @@ type Messages = {
   toast_batch_applied: (count: number) => string;
   toast_speed_applied: (speed: string, count: number) => string;
   toast_aspect_applied: (aspect: string, count: number) => string;
+  toast_folder_unsupported: string;
+  toast_folder_selected: (name: string) => string;
+  toast_folder_failed: string;
+  toast_saved_to_folder: (name: string) => string;
+  toast_save_failed: string;
   toast_ffmpeg_network: string;
   toast_no_clips_active: string;
   toast_no_projects: string;
@@ -131,6 +146,7 @@ export const MESSAGES: Record<Lang, Messages> = {
     status_stopped: "Đã dừng",
     status_loading_engine: "Đang tải bộ máy xử lý video…",
     status_joining: "Đang nối và hoàn thiện video…",
+    status_saved: (name) => `Đã lưu ${name}`,
     status_speed_set: (speed) => `Đã đặt tốc độ ${speed}×`,
     status_aspect_set: (aspect) => `Đã đặt khung hình ${aspect}`,
     status_processing_clip: (current, total) => `Đang xử lý clip ${current}/${total}`,
@@ -168,12 +184,21 @@ export const MESSAGES: Record<Lang, Messages> = {
     mute_label: "Tắt âm thanh",
     mute_sub: "Áp dụng cho toàn bộ clip",
     apply_all: "Áp dụng cho tất cả dự án",
+    output_filename_label: "TÊN FILE XUẤT",
+    output_filename_placeholder: "Nhập tên video",
+    choose_folder: "Chọn thư mục lưu",
+    change_folder: "Đổi thư mục lưu",
+    folder_default: "Chưa chọn · sẽ tải về thư mục mặc định",
+    folder_selected: (name) => `Tự động lưu vào: ${name}`,
+    folder_unsupported: "Trình duyệt này chưa hỗ trợ chọn thư mục",
+    saved_file: (name) => `Đã lưu ${name}`,
     queue_heading: "HÀNG ĐỢI XUẤT",
     projects_word: "dự án",
     total_duration: "TỔNG THỜI LƯỢNG",
     total_size: "DUNG LƯỢNG GỐC",
     queue_empty: "Nạp video vào dự án để tạo hàng đợi.",
     download_prefix: "Tải",
+    download_again: "Tải lại",
     stop_processing: "Dừng xử lý",
     export_active: "Xuất dự án này",
     export_all: "Xuất tất cả",
@@ -189,6 +214,11 @@ export const MESSAGES: Record<Lang, Messages> = {
     toast_batch_applied: (count) => `Đã áp dụng cho ${count} dự án.`,
     toast_speed_applied: (speed, count) => `Đã áp dụng tốc độ ${speed}× cho ${count} dự án.`,
     toast_aspect_applied: (aspect, count) => `Đã áp dụng khung hình ${aspect} cho ${count} dự án.`,
+    toast_folder_unsupported: "Trình duyệt này chưa hỗ trợ chọn thư mục. Video vẫn có thể tải theo cách thông thường.",
+    toast_folder_selected: (name) => `Đã chọn thư mục ${name}. Video xuất sẽ tự động lưu tại đây.`,
+    toast_folder_failed: "Không thể mở thư mục đã chọn.",
+    toast_saved_to_folder: (name) => `Đã lưu ${name} vào thư mục bạn chọn.`,
+    toast_save_failed: "Video đã xử lý xong nhưng không thể ghi vào thư mục. Bạn vẫn có thể dùng nút tải xuống.",
     toast_ffmpeg_network: "Không tải được bộ xử lý FFmpeg. Hãy kiểm tra kết nối mạng.",
     toast_no_clips_active: "Hãy nạp ít nhất một video trước khi xuất.",
     toast_no_projects: "Chưa có dự án nào chứa video.",
@@ -222,6 +252,7 @@ export const MESSAGES: Record<Lang, Messages> = {
     status_stopped: "Stopped",
     status_loading_engine: "Loading video engine…",
     status_joining: "Joining and finalizing video…",
+    status_saved: (name) => `Saved ${name}`,
     status_speed_set: (speed) => `Speed set to ${speed}×`,
     status_aspect_set: (aspect) => `Aspect set to ${aspect}`,
     status_processing_clip: (current, total) => `Processing clip ${current}/${total}`,
@@ -259,12 +290,21 @@ export const MESSAGES: Record<Lang, Messages> = {
     mute_label: "Mute audio",
     mute_sub: "Applies to all clips",
     apply_all: "Apply to all projects",
+    output_filename_label: "OUTPUT FILE NAME",
+    output_filename_placeholder: "Enter video name",
+    choose_folder: "Choose save folder",
+    change_folder: "Change save folder",
+    folder_default: "Not selected · downloads use the browser default",
+    folder_selected: (name) => `Auto-save to: ${name}`,
+    folder_unsupported: "Folder selection is not supported in this browser",
+    saved_file: (name) => `Saved ${name}`,
     queue_heading: "EXPORT QUEUE",
     projects_word: "projects",
     total_duration: "TOTAL DURATION",
     total_size: "SOURCE SIZE",
     queue_empty: "Load videos into a project to build the queue.",
     download_prefix: "Download",
+    download_again: "Download again",
     stop_processing: "Stop processing",
     export_active: "Export this project",
     export_all: "Export all",
@@ -280,6 +320,11 @@ export const MESSAGES: Record<Lang, Messages> = {
     toast_batch_applied: (count) => `Applied to ${count} projects.`,
     toast_speed_applied: (speed, count) => `Applied ${speed}× speed to ${count} projects.`,
     toast_aspect_applied: (aspect, count) => `Applied ${aspect} aspect to ${count} projects.`,
+    toast_folder_unsupported: "This browser cannot choose a save folder. You can still use normal downloads.",
+    toast_folder_selected: (name) => `Selected ${name}. Exported videos will be saved there automatically.`,
+    toast_folder_failed: "Could not open the selected folder.",
+    toast_saved_to_folder: (name) => `Saved ${name} to your selected folder.`,
+    toast_save_failed: "The video finished processing but could not be written to the folder. Use the download button instead.",
     toast_ffmpeg_network: "Could not load the FFmpeg engine. Check your connection.",
     toast_no_clips_active: "Load at least one video before exporting.",
     toast_no_projects: "No project contains videos yet.",
@@ -313,6 +358,7 @@ export const MESSAGES: Record<Lang, Messages> = {
     status_stopped: "Arrêté",
     status_loading_engine: "Chargement du moteur vidéo…",
     status_joining: "Assemblage et finalisation…",
+    status_saved: (name) => `${name} enregistré`,
     status_speed_set: (speed) => `Vitesse réglée à ${speed}×`,
     status_aspect_set: (aspect) => `Format réglé à ${aspect}`,
     status_processing_clip: (current, total) => `Traitement du clip ${current}/${total}`,
@@ -350,12 +396,21 @@ export const MESSAGES: Record<Lang, Messages> = {
     mute_label: "Couper le son",
     mute_sub: "S'applique à tous les clips",
     apply_all: "Appliquer à tous les projets",
+    output_filename_label: "NOM DU FICHIER DE SORTIE",
+    output_filename_placeholder: "Nom de la vidéo",
+    choose_folder: "Choisir le dossier",
+    change_folder: "Changer de dossier",
+    folder_default: "Non sélectionné · téléchargement par défaut",
+    folder_selected: (name) => `Enregistrement automatique dans : ${name}`,
+    folder_unsupported: "La sélection de dossier n'est pas prise en charge",
+    saved_file: (name) => `${name} enregistré`,
     queue_heading: "FILE D'EXPORT",
     projects_word: "projets",
     total_duration: "DURÉE TOTALE",
     total_size: "TAILLE SOURCE",
     queue_empty: "Chargez des vidéos dans un projet pour créer la file.",
     download_prefix: "Télécharger",
+    download_again: "Retélécharger",
     stop_processing: "Arrêter le traitement",
     export_active: "Exporter ce projet",
     export_all: "Tout exporter",
@@ -371,6 +426,11 @@ export const MESSAGES: Record<Lang, Messages> = {
     toast_batch_applied: (count) => `Appliqué à ${count} projets.`,
     toast_speed_applied: (speed, count) => `Vitesse ${speed}× appliquée à ${count} projets.`,
     toast_aspect_applied: (aspect, count) => `Format ${aspect} appliqué à ${count} projets.`,
+    toast_folder_unsupported: "Ce navigateur ne permet pas de choisir un dossier. Le téléchargement normal reste disponible.",
+    toast_folder_selected: (name) => `Dossier ${name} sélectionné. Les vidéos y seront enregistrées automatiquement.`,
+    toast_folder_failed: "Impossible d'ouvrir le dossier sélectionné.",
+    toast_saved_to_folder: (name) => `${name} a été enregistré dans le dossier sélectionné.`,
+    toast_save_failed: "La vidéo est prête, mais l'écriture dans le dossier a échoué. Utilisez le bouton de téléchargement.",
     toast_ffmpeg_network: "Impossible de charger FFmpeg. Vérifiez votre connexion.",
     toast_no_clips_active: "Chargez au moins une vidéo avant d'exporter.",
     toast_no_projects: "Aucun projet ne contient de vidéos.",
@@ -404,6 +464,7 @@ export const MESSAGES: Record<Lang, Messages> = {
     status_stopped: "已停止",
     status_loading_engine: "正在加载视频引擎…",
     status_joining: "正在拼接并完成视频…",
+    status_saved: (name) => `已保存 ${name}`,
     status_speed_set: (speed) => `速度已设为 ${speed}×`,
     status_aspect_set: (aspect) => `画幅已设为 ${aspect}`,
     status_processing_clip: (current, total) => `正在处理片段 ${current}/${total}`,
@@ -441,12 +502,21 @@ export const MESSAGES: Record<Lang, Messages> = {
     mute_label: "静音",
     mute_sub: "应用到所有片段",
     apply_all: "应用到所有项目",
+    output_filename_label: "导出文件名",
+    output_filename_placeholder: "输入视频名称",
+    choose_folder: "选择保存文件夹",
+    change_folder: "更改保存文件夹",
+    folder_default: "未选择 · 使用浏览器默认下载位置",
+    folder_selected: (name) => `自动保存到：${name}`,
+    folder_unsupported: "此浏览器不支持选择文件夹",
+    saved_file: (name) => `已保存 ${name}`,
     queue_heading: "导出队列",
     projects_word: "个项目",
     total_duration: "总时长",
     total_size: "源文件大小",
     queue_empty: "将视频加载到项目中以创建队列。",
     download_prefix: "下载",
+    download_again: "再次下载",
     stop_processing: "停止处理",
     export_active: "导出此项目",
     export_all: "全部导出",
@@ -462,6 +532,11 @@ export const MESSAGES: Record<Lang, Messages> = {
     toast_batch_applied: (count) => `已应用到 ${count} 个项目。`,
     toast_speed_applied: (speed, count) => `已将 ${speed}× 速度应用到 ${count} 个项目。`,
     toast_aspect_applied: (aspect, count) => `已将 ${aspect} 画幅应用到 ${count} 个项目。`,
+    toast_folder_unsupported: "此浏览器不支持选择保存文件夹，仍可使用普通下载。",
+    toast_folder_selected: (name) => `已选择 ${name}，导出视频将自动保存到该文件夹。`,
+    toast_folder_failed: "无法打开所选文件夹。",
+    toast_saved_to_folder: (name) => `已将 ${name} 保存到所选文件夹。`,
+    toast_save_failed: "视频处理完成，但无法写入文件夹。请使用下载按钮。",
     toast_ffmpeg_network: "无法加载 FFmpeg 引擎，请检查网络连接。",
     toast_no_clips_active: "导出前请至少加载一个视频。",
     toast_no_projects: "还没有包含视频的项目。",
@@ -500,6 +575,8 @@ export function translateStatus(text: string, lang: Lang): string {
   if (exact) return t[exact] as string;
   let match = text.match(/^Đang xử lý clip (\d+)\/(\d+)$/);
   if (match) return t.status_processing_clip(match[1], match[2]);
+  match = text.match(/^Đã lưu (.+)$/);
+  if (match) return t.status_saved(match[1]);
   match = text.match(/^Đã đặt tốc độ (.+)×$/);
   if (match) return t.status_speed_set(match[1]);
   match = text.match(/^Đã đặt khung hình (.+)$/);

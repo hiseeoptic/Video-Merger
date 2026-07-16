@@ -24,6 +24,7 @@ type Clip = {
 type Project = {
   id: string;
   name: string;
+  outputName: string;
   clips: Clip[];
   quality: "720p" | "1080p";
   aspect: "16:9" | "9:16" | "1:1";
@@ -32,7 +33,26 @@ type Project = {
   progress: number;
   statusText: string;
   outputUrl?: string;
+  savedFileName?: string;
   error?: string;
+};
+
+type WritableFileLike = {
+  write(data: Blob): Promise<void>;
+  close(): Promise<void>;
+};
+
+type FileHandleLike = {
+  createWritable(): Promise<WritableFileLike>;
+};
+
+type DirectoryHandleLike = {
+  name: string;
+  getFileHandle(name: string, options?: { create?: boolean }): Promise<FileHandleLike>;
+};
+
+type DirectoryPickerWindow = Window & {
+  showDirectoryPicker?: (options?: { id?: string; mode?: "read" | "readwrite" }) => Promise<DirectoryHandleLike>;
 };
 
 const SPEEDS = [0.5, 0.75, 1, 1.1, 1.2, 1.3, 1.4, 1.5, 1.75, 2, 2.5, 3, 4];
@@ -44,10 +64,52 @@ function newId(prefix: string) {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
 }
 
+function safeOutputBase(value: string, fallback = "cutflow") {
+  const cleaned = value
+    .replace(/\.mp4$/i, "")
+    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, "-")
+    .replace(/\s+/g, " ")
+    .replace(/[. ]+$/g, "")
+    .trim()
+    .slice(0, 120);
+  return cleaned || fallback;
+}
+
+function defaultOutputBase(projectName: string) {
+  return safeOutputBase(projectName).replace(/\s+/g, "-").toLowerCase();
+}
+
+function projectOutputFileName(project: Pick<Project, "name" | "outputName">) {
+  return `${safeOutputBase(project.outputName, defaultOutputBase(project.name))}.mp4`;
+}
+
+async function fileExists(directory: DirectoryHandleLike, fileName: string) {
+  try {
+    await directory.getFileHandle(fileName);
+    return true;
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "NotFoundError") return false;
+    throw error;
+  }
+}
+
+async function nextAvailableFileName(directory: DirectoryHandleLike, preferredName: string) {
+  const base = preferredName.replace(/\.mp4$/i, "");
+  let candidate = `${base}.mp4`;
+  let suffix = 2;
+  while (await fileExists(directory, candidate)) {
+    candidate = `${base} (${suffix}).mp4`;
+    suffix += 1;
+  }
+  return candidate;
+}
+
 function emptyProject(id = newId("project"), index = 1, name?: string): Project {
+  const projectName = name || `Dự án ${String(index).padStart(2, "0")}`;
   return {
     id,
-    name: name || `Dự án ${String(index).padStart(2, "0")}`,
+    name: projectName,
+    outputName: defaultOutputBase(projectName),
     clips: [],
     quality: "720p",
     aspect: "9:16",
@@ -162,8 +224,10 @@ export function VideoMergerApp() {
   const [batchMuted, setBatchMuted] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [uiLang, setUiLang] = useState<Lang>("vi");
+  const [downloadDirectoryName, setDownloadDirectoryName] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const previewVideoRef = useRef<HTMLVideoElement>(null);
+  const downloadDirectoryRef = useRef<DirectoryHandleLike | null>(null);
   const projectsRef = useRef(projects);
   const cancelledRef = useRef(false);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -176,13 +240,17 @@ export function VideoMergerApp() {
   // nhất mà không phải thêm dependency.
   const t = MESSAGES[uiLang];
   const tRef = useRef(t);
-  tRef.current = t;
+  useEffect(() => {
+    tRef.current = t;
+  }, [t]);
 
   // Đồng bộ ngôn ngữ: nhớ lựa chọn cũ trong localStorage, và nhận lệnh
   // SET_LANG do extension AutoFlow gửi vào iframe khi người dùng đổi ngôn ngữ.
   useEffect(() => {
-    const saved = normalizeLang(window.localStorage.getItem("cutflow-lang"));
-    if (saved) setUiLang(saved);
+    const restoreTimer = window.setTimeout(() => {
+      const saved = normalizeLang(window.localStorage.getItem("cutflow-lang"));
+      if (saved) setUiLang(saved);
+    }, 0);
     const onLangMessage = (event: MessageEvent) => {
       if (event.data?.type !== "SET_LANG" || event.data?.source !== "CUTFLOW_EXTENSION") return;
       const next = normalizeLang(event.data.lang);
@@ -191,7 +259,10 @@ export function VideoMergerApp() {
       try { window.localStorage.setItem("cutflow-lang", next); } catch { /* private mode */ }
     };
     window.addEventListener("message", onLangMessage);
-    return () => window.removeEventListener("message", onLangMessage);
+    return () => {
+      window.clearTimeout(restoreTimer);
+      window.removeEventListener("message", onLangMessage);
+    };
   }, []);
 
   useEffect(() => () => {
@@ -208,6 +279,23 @@ export function VideoMergerApp() {
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
     toastTimerRef.current = setTimeout(() => setToast(null), 3600);
   }, []);
+
+  const chooseDownloadDirectory = async () => {
+    const picker = (window as DirectoryPickerWindow).showDirectoryPicker;
+    if (!picker) {
+      showToast(t.toast_folder_unsupported);
+      return;
+    }
+    try {
+      const directory = await picker.call(window, { id: "cutflow-exports", mode: "readwrite" });
+      downloadDirectoryRef.current = directory;
+      setDownloadDirectoryName(directory.name);
+      showToast(t.toast_folder_selected(directory.name));
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return;
+      showToast(t.toast_folder_failed);
+    }
+  };
 
   const activeProject = projects.find((project) => project.id === activeProjectId) || projects[0];
   const selectedClip = activeProject?.clips.find((clip) => clip.id === selectedClipId) || activeProject?.clips[0] || null;
@@ -226,6 +314,17 @@ export function VideoMergerApp() {
       projectsRef.current = next;
       return next;
     });
+  }, []);
+
+  const saveOutputToDirectory = useCallback(async (project: Project, output: Blob) => {
+    const directory = downloadDirectoryRef.current;
+    if (!directory) return null;
+    const fileName = await nextAvailableFileName(directory, projectOutputFileName(project));
+    const fileHandle = await directory.getFileHandle(fileName, { create: true });
+    const writable = await fileHandle.createWritable();
+    await writable.write(output);
+    await writable.close();
+    return fileName;
   }, []);
 
   const ingestFiles = useCallback(async (files: File[], projectId = activeProjectId) => {
@@ -412,7 +511,7 @@ export function VideoMergerApp() {
     if (!project?.clips.length) return false;
     if (project.outputUrl) URL.revokeObjectURL(project.outputUrl);
 
-    updateProject(projectId, (current) => ({ ...current, status: "processing", progress: 1, statusText: "Đang chuẩn bị…", error: undefined, outputUrl: undefined }));
+    updateProject(projectId, (current) => ({ ...current, status: "processing", progress: 1, statusText: "Đang chuẩn bị…", error: undefined, outputUrl: undefined, savedFileName: undefined }));
     try {
       const engineProject: EngineProject = {
         id: project.id.replace(/[^a-z0-9_-]/gi, "_"),
@@ -432,8 +531,22 @@ export function VideoMergerApp() {
         updateProject(projectId, (current) => ({ ...current, progress: Math.round(progress * 100), statusText }));
       });
       const outputUrl = URL.createObjectURL(output);
-      const completed = { ...project, outputUrl };
-      updateProject(projectId, (current) => ({ ...current, status: "done", progress: 100, statusText: "Sẵn sàng tải xuống", outputUrl }));
+      let savedFileName: string | undefined;
+      try {
+        savedFileName = await saveOutputToDirectory(project, output) || undefined;
+        if (savedFileName) showToast(tRef.current.toast_saved_to_folder(savedFileName));
+      } catch {
+        showToast(tRef.current.toast_save_failed);
+      }
+      const completed = { ...project, outputUrl, savedFileName };
+      updateProject(projectId, (current) => ({
+        ...current,
+        status: "done",
+        progress: 100,
+        statusText: savedFileName ? `Đã lưu ${savedFileName}` : "Sẵn sàng tải xuống",
+        outputUrl,
+        savedFileName,
+      }));
       notifyExtension(completed);
       return true;
     } catch (error) {
@@ -442,7 +555,7 @@ export function VideoMergerApp() {
       showToast(message.includes("fetch") ? tRef.current.toast_ffmpeg_network : message);
       return false;
     }
-  }, [showToast, updateProject]);
+  }, [saveOutputToDirectory, showToast, updateProject]);
 
   const exportActive = async () => {
     if (!activeProject.clips.length) {
@@ -501,7 +614,7 @@ export function VideoMergerApp() {
     void ingestFiles(Array.from(event.dataTransfer.files));
   };
 
-  const activeOutputName = `${activeProject.name.trim().replace(/\s+/g, "-").toLowerCase() || "cutflow"}.mp4`;
+  const activeOutputName = projectOutputFileName(activeProject);
   const activeAspectClass = `ratio-${activeProject.aspect.replace(":", "x")}`;
 
   const queueSummary = useMemo(() => {
@@ -742,6 +855,37 @@ export function VideoMergerApp() {
 
           <button type="button" className="apply-button" onClick={applyBatchSettings}>{t.apply_all}</button>
 
+          <div className="save-settings">
+            <label className="output-name-label" htmlFor="output-file-name">
+              <span>{t.output_filename_label}</span>
+              <div className="output-name-input">
+                <input
+                  id="output-file-name"
+                  value={activeProject.outputName}
+                  placeholder={t.output_filename_placeholder}
+                  onChange={(event) => updateProject(activeProject.id, (project) => ({ ...project, outputName: event.target.value }))}
+                  onBlur={(event) => updateProject(activeProject.id, (project) => ({
+                    ...project,
+                    outputName: safeOutputBase(event.target.value, defaultOutputBase(project.name)),
+                  }))}
+                />
+                <i>.mp4</i>
+              </div>
+            </label>
+            <button
+              type="button"
+              className="folder-button"
+              onClick={chooseDownloadDirectory}
+            >
+              <span>⌁</span>{downloadDirectoryName ? t.change_folder : t.choose_folder}
+            </button>
+            <small className={downloadDirectoryName ? "folder-state selected" : "folder-state"}>
+              {downloadDirectoryName
+                ? t.folder_selected(downloadDirectoryName)
+                : t.folder_default}
+            </small>
+          </div>
+
           <div className="queue-box">
             <div className="queue-heading"><span>{t.queue_heading}</span><small>{projectCountWithClips} {t.projects_word}</small></div>
             <div className="queue-stats">
@@ -768,8 +912,12 @@ export function VideoMergerApp() {
 
           {activeProject.status === "error" ? <p className="error-message">{activeProject.error}</p> : null}
 
+          {activeProject.savedFileName ? <p className="saved-file">✓ {t.saved_file(activeProject.savedFileName)}</p> : null}
+
           {activeProject.outputUrl ? (
-            <a className="download-button" href={activeProject.outputUrl} download={activeOutputName}>↓ {t.download_prefix} {activeProject.name}</a>
+            <a className="download-button" href={activeProject.outputUrl} download={activeOutputName}>
+              ↓ {activeProject.savedFileName ? t.download_again : t.download_prefix} {activeOutputName}
+            </a>
           ) : null}
 
           <div className="export-actions">

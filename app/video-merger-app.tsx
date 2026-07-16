@@ -1,6 +1,6 @@
 "use client";
 
-import { ChangeEvent, DragEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, DragEvent, PointerEvent as ReactPointerEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { videoEngine, type EngineProject } from "./lib/video-engine";
 import { MESSAGES, normalizeLang, translateStatus, type Lang } from "./lib/i18n";
 
@@ -21,6 +21,15 @@ type Clip = {
   speed: number;
 };
 
+type BlurRegion = {
+  enabled: boolean;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  strength: number;
+};
+
 type Project = {
   id: string;
   name: string;
@@ -29,6 +38,7 @@ type Project = {
   quality: "720p" | "1080p";
   aspect: "16:9" | "9:16" | "1:1";
   muted: boolean;
+  blur: BlurRegion;
   status: ProjectStatus;
   progress: number;
   statusText: string;
@@ -63,12 +73,30 @@ const SPEEDS = [0.5, 0.75, 1, 1.1, 1.2, 1.3, 1.4, 1.5, 1.75, 2, 2.5, 3, 4];
 const SPEED_PRESETS = [1, 1.1, 1.2, 1.3];
 const MAX_PROJECTS = 5;
 const MAX_CLIPS = 12;
+const DEFAULT_BLUR: BlurRegion = { enabled: false, x: 78, y: 86, width: 18, height: 9, strength: 24 };
 const HANDLE_DB_NAME = "cutflow-file-handles";
 const HANDLE_STORE_NAME = "handles";
 const EXPORT_DIRECTORY_KEY = "export-directory";
 
 function newId(prefix: string) {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+}
+
+function clamp(value: number, minimum: number, maximum: number) {
+  return Math.min(maximum, Math.max(minimum, value));
+}
+
+function normalizeBlurRegion(region: BlurRegion): BlurRegion {
+  const width = clamp(region.width, 5, 80);
+  const height = clamp(region.height, 4, 60);
+  return {
+    ...region,
+    width,
+    height,
+    x: clamp(region.x, 0, 100 - width),
+    y: clamp(region.y, 0, 100 - height),
+    strength: clamp(region.strength, 4, 40),
+  };
 }
 
 function safeOutputBase(value: string, fallback = "cutflow") {
@@ -179,6 +207,7 @@ function emptyProject(id = newId("project"), index = 1, name?: string): Project 
     quality: "720p",
     aspect: "9:16",
     muted: false,
+    blur: { ...DEFAULT_BLUR },
     status: "idle",
     progress: 0,
     statusText: "Sẵn sàng",
@@ -294,6 +323,13 @@ export function VideoMergerApp() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const previewVideoRef = useRef<HTMLVideoElement>(null);
   const downloadDirectoryRef = useRef<DirectoryHandleLike | null>(null);
+  const blurDragRef = useRef<{
+    mode: "move" | "resize";
+    startX: number;
+    startY: number;
+    frame: DOMRect;
+    initial: BlurRegion;
+  } | null>(null);
   const projectsRef = useRef(projects);
   const cancelledRef = useRef(false);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -460,6 +496,75 @@ export function VideoMergerApp() {
       return next;
     });
   }, []);
+
+  const updateBlurRegion = useCallback((update: Partial<BlurRegion>) => {
+    updateProject(activeProject.id, (project) => ({
+      ...project,
+      blur: normalizeBlurRegion({ ...project.blur, ...update }),
+      status: "idle",
+      progress: 0,
+      statusText: "Đã thay đổi",
+    }));
+  }, [activeProject.id, updateProject]);
+
+  const setBlurCorner = (horizontal: "left" | "right", vertical: "top" | "bottom") => {
+    const { width, height } = activeProject.blur;
+    updateBlurRegion({
+      enabled: true,
+      x: horizontal === "left" ? 3 : 97 - width,
+      y: vertical === "top" ? 3 : 97 - height,
+    });
+  };
+
+  const applyBlurToAll = () => {
+    setProjects((current) => {
+      const next = current.map((project) => ({
+        ...project,
+        blur: { ...activeProject.blur },
+        status: project.clips.length ? "idle" as const : project.status,
+        progress: project.clips.length ? 0 : project.progress,
+        statusText: project.clips.length ? "Đã thay đổi" : project.statusText,
+      }));
+      projectsRef.current = next;
+      return next;
+    });
+    showToast(t.toast_blur_applied(projectCountWithClips || projects.length));
+  };
+
+  const startBlurDrag = (event: ReactPointerEvent<HTMLElement>, mode: "move" | "resize") => {
+    if (!activeProject.blur.enabled) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const frame = event.currentTarget.closest(".video-preview")?.getBoundingClientRect();
+    if (!frame) return;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    blurDragRef.current = {
+      mode,
+      startX: event.clientX,
+      startY: event.clientY,
+      frame,
+      initial: { ...activeProject.blur },
+    };
+  };
+
+  const moveBlurRegion = (event: ReactPointerEvent<HTMLElement>) => {
+    const drag = blurDragRef.current;
+    if (!drag) return;
+    event.preventDefault();
+    const deltaX = ((event.clientX - drag.startX) / drag.frame.width) * 100;
+    const deltaY = ((event.clientY - drag.startY) / drag.frame.height) * 100;
+    if (drag.mode === "move") {
+      updateBlurRegion({ x: drag.initial.x + deltaX, y: drag.initial.y + deltaY });
+    } else {
+      updateBlurRegion({ width: drag.initial.width + deltaX, height: drag.initial.height + deltaY });
+    }
+  };
+
+  const stopBlurDrag = (event: ReactPointerEvent<HTMLElement>) => {
+    if (!blurDragRef.current) return;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    blurDragRef.current = null;
+  };
 
   const saveOutputToDirectory = useCallback(async (project: Project, output: Blob) => {
     const directory = downloadDirectoryRef.current;
@@ -667,6 +772,7 @@ export function VideoMergerApp() {
         quality: project.quality,
         aspect: project.aspect,
         muted: project.muted,
+        blur: project.blur,
         clips: project.clips.map((clip) => ({
           id: clip.id,
           file: clip.file,
@@ -877,6 +983,26 @@ export function VideoMergerApp() {
                   preload="metadata"
                   onLoadedMetadata={(event) => { event.currentTarget.playbackRate = selectedClip.speed; }}
                 />
+                {activeProject.blur.enabled ? (
+                  <div
+                    className="blur-preview-region"
+                    style={{
+                      left: `${activeProject.blur.x}%`,
+                      top: `${activeProject.blur.y}%`,
+                      width: `${activeProject.blur.width}%`,
+                      height: `${activeProject.blur.height}%`,
+                      backdropFilter: `blur(${Math.max(5, activeProject.blur.strength / 2)}px)`,
+                    }}
+                    onPointerDown={(event) => startBlurDrag(event, "move")}
+                    onPointerMove={moveBlurRegion}
+                    onPointerUp={stopBlurDrag}
+                    onPointerCancel={stopBlurDrag}
+                    title={t.blur_drag_hint}
+                  >
+                    <span>{t.blur_region_label}</span>
+                    <i onPointerDown={(event) => startBlurDrag(event, "resize")} />
+                  </div>
+                ) : null}
                 <span className="preview-badge">{t.preview_badge} · {activeProject.aspect} · {selectedClip.speed}×</span>
               </div>
             ) : (
@@ -1023,6 +1149,42 @@ export function VideoMergerApp() {
           </label>
 
           <button type="button" className="apply-button" onClick={applyBatchSettings}>{t.apply_all}</button>
+
+          <div className="blur-settings">
+            <label className="toggle-row blur-toggle">
+              <span><b>{t.blur_title}</b><small>{t.blur_subtitle}</small></span>
+              <input
+                type="checkbox"
+                checked={activeProject.blur.enabled}
+                onChange={(event) => updateBlurRegion({ enabled: event.target.checked })}
+              />
+              <i />
+            </label>
+            {activeProject.blur.enabled ? (
+              <div className="blur-controls">
+                <small>{t.blur_drag_hint}</small>
+                <div className="blur-corners" aria-label={t.blur_position_label}>
+                  <button type="button" onClick={() => setBlurCorner("left", "top")} aria-label={t.blur_top_left}>↖</button>
+                  <button type="button" onClick={() => setBlurCorner("right", "top")} aria-label={t.blur_top_right}>↗</button>
+                  <button type="button" onClick={() => setBlurCorner("left", "bottom")} aria-label={t.blur_bottom_left}>↙</button>
+                  <button type="button" onClick={() => setBlurCorner("right", "bottom")} aria-label={t.blur_bottom_right}>↘</button>
+                </div>
+                <label>
+                  <span>{t.blur_width}<b>{Math.round(activeProject.blur.width)}%</b></span>
+                  <input type="range" min="5" max="60" value={activeProject.blur.width} onChange={(event) => updateBlurRegion({ width: Number(event.target.value) })} />
+                </label>
+                <label>
+                  <span>{t.blur_height}<b>{Math.round(activeProject.blur.height)}%</b></span>
+                  <input type="range" min="4" max="40" value={activeProject.blur.height} onChange={(event) => updateBlurRegion({ height: Number(event.target.value) })} />
+                </label>
+                <label>
+                  <span>{t.blur_strength}<b>{Math.round(activeProject.blur.strength)}</b></span>
+                  <input type="range" min="4" max="40" value={activeProject.blur.strength} onChange={(event) => updateBlurRegion({ strength: Number(event.target.value) })} />
+                </label>
+                <button type="button" className="blur-apply-all" onClick={applyBlurToAll}>{t.blur_apply_all}</button>
+              </div>
+            ) : null}
+          </div>
 
           <div className="save-settings">
             <label className="output-name-label" htmlFor="output-file-name">

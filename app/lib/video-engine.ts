@@ -13,6 +13,14 @@ export type EngineProject = {
   quality: "720p" | "1080p";
   aspect: "16:9" | "9:16" | "1:1";
   muted: boolean;
+  blur: {
+    enabled: boolean;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    strength: number;
+  };
 };
 
 type EngineProgress = (progress: number, message: string) => void;
@@ -51,6 +59,26 @@ function audioTempoFilter(speed: number) {
   }
   filters.push(`atempo=${remaining.toFixed(4)}`);
   return filters.join(",");
+}
+
+function evenPixel(value: number) {
+  return Math.max(2, Math.floor(value / 2) * 2);
+}
+
+function blurFilterGraph(project: EngineProject, width: number, height: number, baseFilter: string) {
+  const blurWidth = Math.min(width, evenPixel(width * project.blur.width / 100));
+  const blurHeight = Math.min(height, evenPixel(height * project.blur.height / 100));
+  const blurX = Math.min(width - blurWidth, evenPixel(width * project.blur.x / 100));
+  const blurY = Math.min(height - blurHeight, evenPixel(height * project.blur.y / 100));
+  const maximumRadius = Math.max(2, Math.floor(Math.min(blurWidth, blurHeight) / 2) - 1);
+  const radius = Math.max(2, Math.min(Math.round(project.blur.strength), maximumRadius));
+  const chromaRadius = Math.max(1, Math.floor(radius / 2));
+  return [
+    `[0:v:0]${baseFilter}[base]`,
+    "[base]split=2[clean][blur_source]",
+    `[blur_source]crop=${blurWidth}:${blurHeight}:${blurX}:${blurY},boxblur=luma_radius=${radius}:luma_power=2:chroma_radius=${chromaRadius}:chroma_power=2[blurred]`,
+    `[clean][blurred]overlay=${blurX}:${blurY}:shortest=1[video_out]`,
+  ].join(";");
 }
 
 class BrowserVideoEngine {
@@ -161,7 +189,7 @@ class BrowserVideoEngine {
         const hasAudio = !project.muted && await this.inputHasAudio(ffmpeg, inputName);
 
         const duration = Math.max(0.05, clip.trimEnd - clip.trimStart);
-        const videoFilter = [
+        const baseVideoFilter = [
           `setpts=PTS/${clip.speed}`,
           `scale=${width}:${height}:force_original_aspect_ratio=increase`,
           `crop=${width}:${height}:(iw-ow)/2:(ih-oh)/2`,
@@ -178,10 +206,11 @@ class BrowserVideoEngine {
           args.push("-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000");
         }
 
-        args.push(
-          "-map", "0:v:0",
-          "-vf", videoFilter,
-        );
+        if (project.blur.enabled) {
+          args.push("-filter_complex", blurFilterGraph(project, width, height, baseVideoFilter), "-map", "[video_out]");
+        } else {
+          args.push("-map", "0:v:0", "-vf", baseVideoFilter);
+        }
 
         if (project.muted) {
           args.push("-an");

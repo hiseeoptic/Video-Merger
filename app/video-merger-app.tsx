@@ -320,6 +320,7 @@ export function VideoMergerApp() {
   const [uiLang, setUiLang] = useState<Lang>("vi");
   const [downloadDirectoryName, setDownloadDirectoryName] = useState("");
   const [directoryStatus, setDirectoryStatus] = useState<DirectoryStatus>("restoring");
+  const [isSavingOutput, setIsSavingOutput] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const previewVideoRef = useRef<HTMLVideoElement>(null);
   const downloadDirectoryRef = useRef<DirectoryHandleLike | null>(null);
@@ -759,7 +760,7 @@ export function VideoMergerApp() {
     }, window.location.origin);
   };
 
-  const processProject = useCallback(async (projectId: string) => {
+  const processProject = useCallback(async (projectId: string, autoSaveToDirectory = false) => {
     const project = projectsRef.current.find((item) => item.id === projectId);
     if (!project?.clips.length) return false;
     if (project.outputUrl) URL.revokeObjectURL(project.outputUrl);
@@ -786,12 +787,14 @@ export function VideoMergerApp() {
       });
       const outputUrl = URL.createObjectURL(output);
       let savedFileName: string | undefined;
-      try {
-        savedFileName = await saveOutputToDirectory(project, output) || undefined;
-        if (savedFileName) showToast(tRef.current.toast_saved_to_folder(savedFileName));
-      } catch {
-        setDirectoryStatus("needs-permission");
-        showToast(tRef.current.toast_save_failed);
+      if (autoSaveToDirectory) {
+        try {
+          savedFileName = await saveOutputToDirectory(project, output) || undefined;
+          if (savedFileName) showToast(tRef.current.toast_saved_to_folder(savedFileName));
+        } catch {
+          setDirectoryStatus("needs-permission");
+          showToast(tRef.current.toast_save_failed);
+        }
       }
       const completed = { ...project, outputUrl, savedFileName };
       updateProject(projectId, (current) => ({
@@ -811,6 +814,51 @@ export function VideoMergerApp() {
       return false;
     }
   }, [saveOutputToDirectory, showToast, updateProject]);
+
+  const downloadRenderedOutput = async () => {
+    const project = projectsRef.current.find((item) => item.id === activeProjectId);
+    if (!project?.outputUrl || isSavingOutput) return;
+
+    const directory = downloadDirectoryRef.current;
+    if (!directory || isCrossOriginFrame()) {
+      const link = document.createElement("a");
+      link.href = project.outputUrl;
+      link.download = projectOutputFileName(project);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      return;
+    }
+
+    setIsSavingOutput(true);
+    try {
+      const connected = await directoryHasWritePermission(directory, true);
+      if (!connected) {
+        setDirectoryStatus("needs-permission");
+        showToast(t.toast_folder_permission_denied);
+        return;
+      }
+
+      setDirectoryStatus("connected");
+      const response = await fetch(project.outputUrl);
+      if (!response.ok) throw new Error("Rendered video is unavailable");
+      const output = await response.blob();
+      const savedFileName = await saveOutputToDirectory(project, output);
+      if (!savedFileName) throw new Error("No export directory is connected");
+
+      updateProject(project.id, (current) => ({
+        ...current,
+        savedFileName,
+        statusText: `Đã lưu ${savedFileName}`,
+      }));
+      showToast(t.toast_saved_to_folder(savedFileName));
+    } catch {
+      setDirectoryStatus("needs-permission");
+      showToast(t.toast_save_failed);
+    } finally {
+      setIsSavingOutput(false);
+    }
+  };
 
   const prepareDownloadDirectory = async () => {
     const directory = downloadDirectoryRef.current;
@@ -856,7 +904,7 @@ export function VideoMergerApp() {
     let failedCount = 0;
     for (const id of ids) {
       if (cancelledRef.current) break;
-      const completed = await processProject(id);
+      const completed = await processProject(id, true);
       if (completed) completedCount += 1;
       else failedCount += 1;
     }
@@ -1260,9 +1308,9 @@ export function VideoMergerApp() {
           {activeProject.savedFileName ? <p className="saved-file">✓ {t.saved_file(activeProject.savedFileName)}</p> : null}
 
           {activeProject.outputUrl ? (
-            <a className="download-button" href={activeProject.outputUrl} download={activeOutputName}>
+            <button type="button" className="download-button" onClick={downloadRenderedOutput} disabled={isSavingOutput}>
               ↓ {activeProject.savedFileName ? t.download_again : t.download_prefix} {activeOutputName}
-            </a>
+            </button>
           ) : null}
 
           <div className="export-actions">

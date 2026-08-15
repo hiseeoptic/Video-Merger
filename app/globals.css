@@ -141,9 +141,12 @@ button:disabled { cursor: not-allowed; opacity: .42; }
 .timeline-head small { color: #686772; font-size: 8px; }
 .timeline-head button { background: transparent; border: 0; color: var(--purple-bright); font-size: 9px; }
 .clip-strip { display: flex; gap: 8px; overflow-x: auto; padding: 3px 2px 8px; min-height: 104px; border: 1px solid transparent; border-radius: 10px; }
-.clip-card { flex: 0 0 158px; background: #17171d; border: 1px solid #2b2a33; border-radius: 9px; overflow: hidden; cursor: pointer; position: relative; transition: .18s ease; }
+.clip-card { flex: 0 0 158px; background: #17171d; border: 1px solid #2b2a33; border-radius: 9px; overflow: hidden; cursor: grab; position: relative; transition: .18s ease; touch-action: pan-y; user-select: none; }
 .clip-card:hover { border-color: #484651; transform: translateY(-1px); }
 .clip-card.selected { border-color: var(--purple); box-shadow: 0 0 0 1px rgba(130,87,255,.28); }
+.clip-card.dragging-clip { opacity: .48; cursor: grabbing; transform: scale(.98); }
+.clip-card.drop-before { box-shadow: -4px 0 0 var(--lime), 0 0 18px rgba(186,242,99,.18); }
+.clip-card.drop-after { box-shadow: 4px 0 0 var(--lime), 0 0 18px rgba(186,242,99,.18); }
 .clip-thumb { height: 58px; background-color: #22212a; background-size: cover; background-position: center; position: relative; }
 .clip-thumb::after { content: ""; position: absolute; inset: 0; background: linear-gradient(transparent, rgba(0,0,0,.5)); }
 .clip-thumb > span { position: absolute; z-index: 1; top: 5px; left: 5px; width: 18px; height: 18px; display: grid; place-items: center; border-radius: 5px; background: rgba(0,0,0,.65); font-size: 8px; }
@@ -283,6 +286,10 @@ button:disabled { cursor: not-allowed; opacity: .42; }
   .timeline-head small { display: none; }
   .export-panel { display: block; padding: 18px 14px; }
   .topbar-actions { justify-self: end; }
+}
+
+@media (hover: none) {
+  .clip-actions { opacity: 1; }
 }
 
 @media (prefers-reduced-motion: reduce) {

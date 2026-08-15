@@ -69,6 +69,20 @@ type DirectoryPickerWindow = Window & {
 
 type DirectoryStatus = "none" | "restoring" | "connected" | "needs-permission" | "blocked" | "unsupported";
 
+type ClipDropTarget = {
+  clipId: string;
+  position: "before" | "after";
+};
+
+type ClipPointerDrag = {
+  projectId: string;
+  clipId: string;
+  pointerId: number;
+  startX: number;
+  startY: number;
+  active: boolean;
+};
+
 const SPEEDS = [0.5, 0.75, 1, 1.1, 1.2, 1.3, 1.4, 1.5, 1.75, 2, 2.5, 3, 4];
 const SPEED_PRESETS = [1, 1.1, 1.2, 1.3];
 const MAX_PROJECTS = 5;
@@ -311,6 +325,8 @@ export function VideoMergerApp() {
   const [activeProjectId, setActiveProjectId] = useState("project-01");
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
+  const [draggedClipId, setDraggedClipId] = useState<string | null>(null);
+  const [clipDropTarget, setClipDropTarget] = useState<ClipDropTarget | null>(null);
   const [isBatching, setIsBatching] = useState(false);
   const [batchSpeed, setBatchSpeed] = useState(1);
   const [batchQuality, setBatchQuality] = useState<Project["quality"]>("720p");
@@ -323,7 +339,11 @@ export function VideoMergerApp() {
   const [isSavingOutput, setIsSavingOutput] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const previewVideoRef = useRef<HTMLVideoElement>(null);
+  const clipStripRef = useRef<HTMLDivElement>(null);
   const downloadDirectoryRef = useRef<DirectoryHandleLike | null>(null);
+  const clipPointerDragRef = useRef<ClipPointerDrag | null>(null);
+  const clipDropTargetRef = useRef<ClipDropTarget | null>(null);
+  const suppressClipClickRef = useRef(false);
   const blurDragRef = useRef<{
     mode: "move" | "resize";
     startX: number;
@@ -699,6 +719,90 @@ export function VideoMergerApp() {
       [clips[index], clips[target]] = [clips[target], clips[index]];
       return { ...project, clips, status: "idle", statusText: "Đã đổi thứ tự" };
     });
+  };
+
+  const reorderClip = (projectId: string, sourceId: string, targetId: string, position: "before" | "after") => {
+    if (sourceId === targetId) return;
+    updateProject(projectId, (project) => {
+      const sourceIndex = project.clips.findIndex((clip) => clip.id === sourceId);
+      if (sourceIndex < 0 || !project.clips.some((clip) => clip.id === targetId)) return project;
+
+      const clips = [...project.clips];
+      const [source] = clips.splice(sourceIndex, 1);
+      const targetIndex = clips.findIndex((clip) => clip.id === targetId);
+      clips.splice(targetIndex + (position === "after" ? 1 : 0), 0, source);
+      return { ...project, clips, status: "idle", progress: 0, statusText: "Đã đổi thứ tự" };
+    });
+  };
+
+  const resetClipDrag = () => {
+    clipPointerDragRef.current = null;
+    clipDropTargetRef.current = null;
+    setDraggedClipId(null);
+    setClipDropTarget(null);
+  };
+
+  const startClipDrag = (event: ReactPointerEvent<HTMLElement>, clipId: string) => {
+    if (event.button !== 0 || (event.target as HTMLElement).closest("button")) return;
+    clipPointerDragRef.current = {
+      projectId: activeProject.id,
+      clipId,
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      active: false,
+    };
+    setSelectedClipId(clipId);
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+
+  const moveDraggedClip = (event: ReactPointerEvent<HTMLElement>) => {
+    const drag = clipPointerDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+
+    if (!drag.active) {
+      const distance = Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY);
+      if (distance < 6) return;
+      drag.active = true;
+      setDraggedClipId(drag.clipId);
+    }
+
+    event.preventDefault();
+    const strip = clipStripRef.current;
+    if (strip) {
+      const bounds = strip.getBoundingClientRect();
+      const edgeSize = Math.min(56, bounds.width * 0.14);
+      if (event.clientX < bounds.left + edgeSize) strip.scrollBy({ left: -12 });
+      else if (event.clientX > bounds.right - edgeSize) strip.scrollBy({ left: 12 });
+    }
+
+    const hovered = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>("[data-clip-id]");
+    const targetId = hovered?.dataset.clipId;
+    if (!hovered || !targetId || targetId === drag.clipId) {
+      clipDropTargetRef.current = null;
+      setClipDropTarget(null);
+      return;
+    }
+    const bounds = hovered.getBoundingClientRect();
+    const target: ClipDropTarget = {
+      clipId: targetId,
+      position: event.clientX < bounds.left + bounds.width / 2 ? "before" : "after",
+    };
+    clipDropTargetRef.current = target;
+    setClipDropTarget(target);
+  };
+
+  const finishClipDrag = (event: ReactPointerEvent<HTMLElement>) => {
+    const drag = clipPointerDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    if (drag.active) {
+      const target = clipDropTargetRef.current;
+      if (target) reorderClip(drag.projectId, drag.clipId, target.clipId, target.position);
+      suppressClipClickRef.current = true;
+      window.setTimeout(() => { suppressClipClickRef.current = false; }, 0);
+    }
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    resetClipDrag();
   };
 
   const applyBatchSettings = () => {
@@ -1122,13 +1226,39 @@ export function VideoMergerApp() {
               <button type="button" onClick={() => fileInputRef.current?.click()}>＋ {t.add_clip}</button>
             </div>
             <div
+              ref={clipStripRef}
               className={`clip-strip ${isDragging ? "dragging" : ""}`}
               onDragOver={(event) => { event.preventDefault(); setIsDragging(true); }}
               onDragLeave={() => setIsDragging(false)}
               onDrop={onDrop}
             >
               {activeProject.clips.map((clip, index) => (
-                <article key={clip.id} className={`clip-card ${clip.id === selectedClip?.id ? "selected" : ""}`} onClick={() => setSelectedClipId(clip.id)}>
+                <article
+                  key={clip.id}
+                  data-clip-id={clip.id}
+                  className={`clip-card ${clip.id === selectedClip?.id ? "selected" : ""} ${draggedClipId === clip.id ? "dragging-clip" : ""} ${clipDropTarget?.clipId === clip.id ? `drop-${clipDropTarget.position}` : ""}`}
+                  onClick={() => {
+                    if (!suppressClipClickRef.current) setSelectedClipId(clip.id);
+                  }}
+                  onPointerDown={(event) => startClipDrag(event, clip.id)}
+                  onPointerMove={moveDraggedClip}
+                  onPointerUp={finishClipDrag}
+                  onPointerCancel={(event) => {
+                    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+                    resetClipDrag();
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === "ArrowLeft" && index > 0) {
+                      event.preventDefault();
+                      moveClip(clip.id, -1);
+                    } else if (event.key === "ArrowRight" && index < activeProject.clips.length - 1) {
+                      event.preventDefault();
+                      moveClip(clip.id, 1);
+                    }
+                  }}
+                  tabIndex={0}
+                  title={t.timeline_hint}
+                >
                   <div className="clip-thumb" style={clip.thumbnail ? { backgroundImage: `url(${clip.thumbnail})` } : undefined}>
                     <span>{index + 1}</span>
                     <small>{formatTime((clip.trimEnd - clip.trimStart) / clip.speed)}</small>
@@ -1138,8 +1268,6 @@ export function VideoMergerApp() {
                     <small>{clip.speed}× · {formatBytes(clip.size)}</small>
                   </div>
                   <div className="clip-actions">
-                    <button type="button" onClick={(event) => { event.stopPropagation(); moveClip(clip.id, -1); }} disabled={index === 0} aria-label={t.move_left}>‹</button>
-                    <button type="button" onClick={(event) => { event.stopPropagation(); moveClip(clip.id, 1); }} disabled={index === activeProject.clips.length - 1} aria-label={t.move_right}>›</button>
                     <button type="button" className="remove-clip" onClick={(event) => { event.stopPropagation(); removeClip(clip.id); }} aria-label={t.remove_clip}>×</button>
                   </div>
                 </article>

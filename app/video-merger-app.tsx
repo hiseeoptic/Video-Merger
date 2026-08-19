@@ -45,6 +45,9 @@ type Project = {
   outputUrl?: string;
   savedFileName?: string;
   error?: string;
+  downloadDirectory?: DirectoryHandleLike;
+  downloadDirectoryName?: string;
+  directoryStatus?: DirectoryStatus;
 };
 
 type WritableFileLike = {
@@ -437,6 +440,19 @@ export function VideoMergerApp() {
     toastTimerRef.current = setTimeout(() => setToast(null), 3600);
   }, []);
 
+  const updateProject = useCallback((projectId: string, updater: (project: Project) => Project) => {
+    setProjects((current) => {
+      const next = current.map((project) => project.id === projectId ? updater(project) : project);
+      projectsRef.current = next;
+      return next;
+    });
+  }, []);
+
+  const activeProject = projects.find((project) => project.id === activeProjectId) || projects[0];
+  const selectedClip = activeProject?.clips.find((clip) => clip.id === selectedClipId) || activeProject?.clips[0] || null;
+  const projectCountWithClips = projects.filter((project) => project.clips.length > 0).length;
+  const totalQueueDuration = projects.reduce((sum, project) => sum + totalDuration(project), 0);
+
   const chooseDownloadDirectory = async () => {
     if (isCrossOriginFrame()) {
       setDirectoryStatus("blocked");
@@ -460,6 +476,12 @@ export function VideoMergerApp() {
       downloadDirectoryRef.current = directory;
       setDownloadDirectoryName(directory.name);
       setDirectoryStatus("connected");
+      updateProject(activeProject.id, (project) => ({
+        ...project,
+        downloadDirectory: directory,
+        downloadDirectoryName: directory.name,
+        directoryStatus: "connected",
+      }));
       try { await persistDirectoryHandle(directory); } catch { /* private mode */ }
       showToast(t.toast_folder_selected(directory.name));
     } catch (error) {
@@ -474,24 +496,35 @@ export function VideoMergerApp() {
     }
   };
 
+  // Cập nhật trạng thái thư mục cho dự án đang mở: nếu dự án có thư mục riêng
+  // thì đặt vào chính nó, đồng thời phản chiếu lên trạng thái mặc định khi
+  // thư mục hiện dùng chính là thư mục mặc định.
+  const applyProjectDirectoryStatus = (project: Project, directory: DirectoryHandleLike, status: DirectoryStatus) => {
+    if (project.downloadDirectory) {
+      updateProject(project.id, (current) => ({ ...current, directoryStatus: status }));
+    }
+    if (directory === downloadDirectoryRef.current) setDirectoryStatus(status);
+  };
+
   const reconnectDownloadDirectory = async () => {
-    const directory = downloadDirectoryRef.current;
+    const directory = activeProject.downloadDirectory || downloadDirectoryRef.current;
     if (!directory) {
       await chooseDownloadDirectory();
       return;
     }
     if (isCrossOriginFrame()) {
-      setDirectoryStatus("blocked");
+      applyProjectDirectoryStatus(activeProject, directory, "blocked");
       showToast(t.toast_folder_blocked);
       return;
     }
     try {
       const connected = await directoryHasWritePermission(directory, true);
-      setDirectoryStatus(connected ? "connected" : "needs-permission");
+      applyProjectDirectoryStatus(activeProject, directory, connected ? "connected" : "needs-permission");
       showToast(connected ? t.toast_folder_selected(directory.name) : t.toast_folder_permission_denied);
     } catch (error) {
-      setDirectoryStatus(error instanceof DOMException && error.name === "SecurityError" ? "blocked" : "needs-permission");
-      showToast(error instanceof DOMException && error.name === "SecurityError" ? t.toast_folder_blocked : t.toast_folder_permission_denied);
+      const blocked = error instanceof DOMException && error.name === "SecurityError";
+      applyProjectDirectoryStatus(activeProject, directory, blocked ? "blocked" : "needs-permission");
+      showToast(blocked ? t.toast_folder_blocked : t.toast_folder_permission_denied);
     }
   };
 
@@ -499,24 +532,11 @@ export function VideoMergerApp() {
     window.open(`${window.location.origin}${window.location.pathname}?folder-access=1`, "_blank", "noopener,noreferrer");
   };
 
-  const activeProject = projects.find((project) => project.id === activeProjectId) || projects[0];
-  const selectedClip = activeProject?.clips.find((clip) => clip.id === selectedClipId) || activeProject?.clips[0] || null;
-  const projectCountWithClips = projects.filter((project) => project.clips.length > 0).length;
-  const totalQueueDuration = projects.reduce((sum, project) => sum + totalDuration(project), 0);
-
   useEffect(() => {
     if (!previewVideoRef.current || !selectedClip) return;
     previewVideoRef.current.defaultPlaybackRate = selectedClip.speed;
     previewVideoRef.current.playbackRate = selectedClip.speed;
   }, [selectedClip]);
-
-  const updateProject = useCallback((projectId: string, updater: (project: Project) => Project) => {
-    setProjects((current) => {
-      const next = current.map((project) => project.id === projectId ? updater(project) : project);
-      projectsRef.current = next;
-      return next;
-    });
-  }, []);
 
   const updateBlurRegion = useCallback((update: Partial<BlurRegion>) => {
     updateProject(activeProject.id, (project) => ({
@@ -588,7 +608,7 @@ export function VideoMergerApp() {
   };
 
   const saveOutputToDirectory = useCallback(async (project: Project, output: Blob) => {
-    const directory = downloadDirectoryRef.current;
+    const directory = project.downloadDirectory || downloadDirectoryRef.current;
     if (!directory) return null;
     if (!await directoryHasWritePermission(directory)) {
       throw new DOMException("Write permission is not granted", "NotAllowedError");
@@ -923,7 +943,7 @@ export function VideoMergerApp() {
     const project = projectsRef.current.find((item) => item.id === activeProjectId);
     if (!project?.outputUrl || isSavingOutput) return;
 
-    const directory = downloadDirectoryRef.current;
+    const directory = project.downloadDirectory || downloadDirectoryRef.current;
     if (!directory || isCrossOriginFrame()) {
       const link = document.createElement("a");
       link.href = project.outputUrl;
@@ -938,12 +958,12 @@ export function VideoMergerApp() {
     try {
       const connected = await directoryHasWritePermission(directory, true);
       if (!connected) {
-        setDirectoryStatus("needs-permission");
+        applyProjectDirectoryStatus(project, directory, "needs-permission");
         showToast(t.toast_folder_permission_denied);
         return;
       }
 
-      setDirectoryStatus("connected");
+      applyProjectDirectoryStatus(project, directory, "connected");
       const response = await fetch(project.outputUrl);
       if (!response.ok) throw new Error("Rendered video is unavailable");
       const output = await response.blob();
@@ -957,27 +977,27 @@ export function VideoMergerApp() {
       }));
       showToast(t.toast_saved_to_folder(savedFileName));
     } catch {
-      setDirectoryStatus("needs-permission");
+      applyProjectDirectoryStatus(project, directory, "needs-permission");
       showToast(t.toast_save_failed);
     } finally {
       setIsSavingOutput(false);
     }
   };
 
-  const prepareDownloadDirectory = async () => {
-    const directory = downloadDirectoryRef.current;
+  const prepareDownloadDirectory = async (project: Project) => {
+    const directory = project.downloadDirectory || downloadDirectoryRef.current;
     if (!directory) return;
     if (isCrossOriginFrame()) {
-      setDirectoryStatus("blocked");
+      applyProjectDirectoryStatus(project, directory, "blocked");
       showToast(t.toast_folder_blocked);
       return;
     }
     try {
       const connected = await directoryHasWritePermission(directory, true);
-      setDirectoryStatus(connected ? "connected" : "needs-permission");
+      applyProjectDirectoryStatus(project, directory, connected ? "connected" : "needs-permission");
       if (!connected) showToast(t.toast_folder_permission_denied);
     } catch {
-      setDirectoryStatus("needs-permission");
+      applyProjectDirectoryStatus(project, directory, "needs-permission");
       showToast(t.toast_folder_permission_denied);
     }
   };
@@ -987,7 +1007,7 @@ export function VideoMergerApp() {
       showToast(t.toast_no_clips_active);
       return;
     }
-    await prepareDownloadDirectory();
+    await prepareDownloadDirectory(activeProject);
     cancelledRef.current = false;
     setIsBatching(true);
     await processProject(activeProject.id);
@@ -995,12 +1015,21 @@ export function VideoMergerApp() {
   };
 
   const exportAll = async () => {
-    const ids = projectsRef.current.filter((project) => project.clips.length > 0).map((project) => project.id);
+    const exportTargets = projectsRef.current.filter((project) => project.clips.length > 0);
+    const ids = exportTargets.map((project) => project.id);
     if (!ids.length) {
       showToast(t.toast_no_projects);
       return;
     }
-    await prepareDownloadDirectory();
+    // Xin quyền ghi cho từng thư mục đích, khử trùng theo handle để mỗi thư
+    // mục chỉ hỏi quyền một lần dù nhiều dự án cùng trỏ vào.
+    const preparedDirectories = new Set<DirectoryHandleLike>();
+    for (const project of exportTargets) {
+      const directory = project.downloadDirectory || downloadDirectoryRef.current;
+      if (!directory || preparedDirectories.has(directory)) continue;
+      preparedDirectories.add(directory);
+      await prepareDownloadDirectory(project);
+    }
     cancelledRef.current = false;
     setIsBatching(true);
     setProjects((current) => current.map((project) => ids.includes(project.id) ? { ...project, status: "queued", progress: 0, statusText: "Đang chờ" } : project));
@@ -1043,6 +1072,21 @@ export function VideoMergerApp() {
 
   const activeOutputName = projectOutputFileName(activeProject);
   const activeAspectClass = `ratio-${activeProject.aspect.replace(":", "x")}`;
+
+  // Thư mục hiển thị/điều khiển trên panel xuất phản ánh dự án đang mở: dùng
+  // thư mục riêng của dự án nếu có, ngược lại rơi về thư mục mặc định gần nhất.
+  const activeOwnsDirectory = !!activeProject.downloadDirectory;
+  const activeDirectoryStatus: DirectoryStatus = activeOwnsDirectory
+    ? (activeProject.directoryStatus ?? "connected")
+    : directoryStatus;
+  const activeDirectoryName = activeOwnsDirectory
+    ? (activeProject.downloadDirectoryName || activeProject.downloadDirectory?.name || "")
+    : downloadDirectoryName;
+  const activeUsesDefaultDirectory = !activeOwnsDirectory && !!downloadDirectoryName;
+  const projectDirectoryName = (project: Project) =>
+    project.downloadDirectory
+      ? (project.downloadDirectoryName || project.downloadDirectory.name)
+      : downloadDirectoryName;
 
   const queueSummary = useMemo(() => {
     const totalSize = projects.reduce((sum, project) => sum + project.clips.reduce((clipSum, clip) => clipSum + clip.size, 0), 0);
@@ -1382,28 +1426,30 @@ export function VideoMergerApp() {
             <button
               type="button"
               className="folder-button"
-              onClick={directoryStatus === "blocked" ? openStandaloneApp : directoryStatus === "needs-permission" ? reconnectDownloadDirectory : chooseDownloadDirectory}
-              disabled={directoryStatus === "restoring"}
+              onClick={activeDirectoryStatus === "blocked" ? openStandaloneApp : activeDirectoryStatus === "needs-permission" ? reconnectDownloadDirectory : chooseDownloadDirectory}
+              disabled={activeDirectoryStatus === "restoring"}
             >
               <span>⌁</span>
-              {directoryStatus === "blocked"
+              {activeDirectoryStatus === "blocked"
                 ? t.open_standalone
-                : directoryStatus === "needs-permission"
+                : activeDirectoryStatus === "needs-permission"
                   ? t.reconnect_folder
-                  : downloadDirectoryName ? t.change_folder : t.choose_folder}
+                  : activeOwnsDirectory ? t.change_folder : t.choose_folder}
             </button>
-            <small className={directoryStatus === "connected" ? "folder-state selected" : directoryStatus === "blocked" || directoryStatus === "needs-permission" ? "folder-state warning" : "folder-state"}>
-              {directoryStatus === "restoring"
+            <small className={activeDirectoryStatus === "connected" ? "folder-state selected" : activeDirectoryStatus === "blocked" || activeDirectoryStatus === "needs-permission" ? "folder-state warning" : "folder-state"}>
+              {activeDirectoryStatus === "restoring"
                 ? t.folder_restoring
-                : directoryStatus === "connected" && downloadDirectoryName
-                  ? t.folder_selected(downloadDirectoryName)
-                  : directoryStatus === "needs-permission" && downloadDirectoryName
-                    ? t.folder_needs_permission(downloadDirectoryName)
-                    : directoryStatus === "blocked"
-                      ? t.folder_blocked
-                      : directoryStatus === "unsupported"
-                        ? t.folder_unsupported
-                        : t.folder_default}
+                : activeDirectoryStatus === "connected" && activeOwnsDirectory && activeDirectoryName
+                  ? t.folder_selected(activeDirectoryName)
+                  : activeDirectoryStatus === "connected" && activeUsesDefaultDirectory && activeDirectoryName
+                    ? t.folder_inherit_default(activeDirectoryName)
+                    : activeDirectoryStatus === "needs-permission" && activeDirectoryName
+                      ? t.folder_needs_permission(activeDirectoryName)
+                      : activeDirectoryStatus === "blocked"
+                        ? t.folder_blocked
+                        : activeDirectoryStatus === "unsupported"
+                          ? t.folder_unsupported
+                          : t.folder_default}
             </small>
           </div>
 
@@ -1414,12 +1460,18 @@ export function VideoMergerApp() {
               <div><small>{t.total_size}</small><strong>{formatBytes(queueSummary.totalSize)}</strong></div>
             </div>
             <div className="queue-items">
-              {projects.filter((project) => project.clips.length > 0).map((project) => (
-                <div key={project.id}>
-                  <span><i className={`queue-dot ${project.status}`} />{project.name}</span>
-                  <small>{project.status === "processing" ? `${project.progress}%` : formatTime(totalDuration(project))}</small>
-                </div>
-              ))}
+              {projects.filter((project) => project.clips.length > 0).map((project) => {
+                const folderName = projectDirectoryName(project);
+                return (
+                  <div key={project.id}>
+                    <div className="queue-row">
+                      <span><i className={`queue-dot ${project.status}`} />{project.name}</span>
+                      <small>{project.status === "processing" ? `${project.progress}%` : formatTime(totalDuration(project))}</small>
+                    </div>
+                    {folderName ? <em className="queue-folder" title={folderName}>⌁ {folderName}</em> : null}
+                  </div>
+                );
+              })}
               {!projectCountWithClips ? <p>{t.queue_empty}</p> : null}
             </div>
           </div>
